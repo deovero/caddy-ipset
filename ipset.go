@@ -23,8 +23,6 @@ import (
 	"go.uber.org/zap"
 )
 
-
-
 var (
 	// ipsetNameRegex validates ipset names to prevent command injection
 	// Allows alphanumeric characters, hyphens, underscores, and dots
