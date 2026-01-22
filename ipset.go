@@ -73,12 +73,12 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	m.logger = ctx.Logger(m)
 
 	if m.Ipset == "" {
-		return fmt.Errorf("ipset name is required")
+		return fmt.Errorf("ERROR ipset name is required")
 	}
 
 	// Validate ipset name to prevent command injection (important for sudo fallback)
 	if !ipsetNameRegex.MatchString(m.Ipset) {
-		return fmt.Errorf("invalid ipset name '%s': must contain only alphanumeric characters, hyphens, underscores, and dots", m.Ipset)
+		return fmt.Errorf("ERROR invalid ipset name '%s': must contain only alphanumeric characters, hyphens, underscores, and dots", m.Ipset)
 	}
 
 	// Try to verify the ipset exists using native netlink first
@@ -92,7 +92,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 
 			// Try sudo ipset as fallback
 			if err := m.verifySudoIpset(); err != nil {
-				return fmt.Errorf("ipset '%s' cannot be accessed via netlink or sudo: %w", m.Ipset, err)
+				return fmt.Errorf("ERROR ipset '%s' cannot be accessed via netlink or sudo: %w", m.Ipset, err)
 			}
 
 			m.method = ipsetMethodSudo
@@ -103,7 +103,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		}
 
 		// Not a permission error, ipset doesn't exist or other error
-		return fmt.Errorf("ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
+		return fmt.Errorf("ERROR ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
 	}
 
 	// Netlink access successful
@@ -217,7 +217,7 @@ func (m *IpsetMatcher) testIPSudo(ipStr string) (bool, error) {
 	}
 
 	// Any other error is a real error
-	return false, fmt.Errorf("sudo ipset test failed: %w", err)
+	return false, fmt.Errorf("ERROR sudo ipset test failed: %w", err)
 }
 
 // verifySudoIpset verifies that sudo ipset can access the ipset
@@ -228,7 +228,7 @@ func (m *IpsetMatcher) verifySudoIpset() error {
 	cmd := exec.CommandContext(ctx, "sudo", "ipset", "list", m.Ipset)
 	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("sudo ipset list failed: %w", err)
+		return fmt.Errorf("ERROR sudo ipset list failed: %w", err)
 	}
 	return nil
 }
