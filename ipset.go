@@ -86,7 +86,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	if err != nil {
 		// Check if this is a permission error
 		if isPermissionError(err) {
-			m.logger.Warn("netlink access denied, falling back to sudo ipset",
+			m.logger.Warn("netlink access denied, falling back to 'sudo ipset'",
 				zap.String("ipset", m.Ipset),
 				zap.Error(err))
 
