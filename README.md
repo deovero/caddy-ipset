@@ -8,7 +8,6 @@ A Caddy HTTP matcher module that matches requests based on client IP addresses a
 - **Automatic fallback** - Falls back to `sudo ipset` when running as non-privileged user
 - Match HTTP requests against existing Linux ipset lists
 - Uses Caddy's built-in client IP detection (respects `trusted_proxies` configuration)
-- Automatic support for X-Forwarded-For, X-Real-IP, Cf-Connecting-IP headers via `trusted_proxies`
 - Automatic ipset validation on startup
 - Comprehensive logging for debugging and monitoring
 - Simple Caddyfile and JSON configuration
