@@ -210,18 +210,39 @@ sudo setcap cap_net_admin+ep /usr/bin/caddy
 
 ### Option 2: Configure passwordless sudo (recommended for non-privileged users)
 
-If Caddy runs as a non-privileged user without CAP_NET_ADMIN, the module automatically falls back to `sudo ipset`. Configure passwordless sudo by adding to `/etc/sudoers.d/caddy`:
+If Caddy runs as a non-privileged user without CAP_NET_ADMIN, the module automatically falls back to `sudo ipset`. Configure passwordless sudo:
+
+**Step 1:** Create a sudoers file for your Caddy user (replace `caddy` with your actual username):
+
+```bash
+sudo visudo -f /etc/sudoers.d/caddy
+```
+
+**Step 2:** Add this line (replace `caddy` with your username):
 
 ```
 caddy ALL=(ALL) NOPASSWD: /usr/sbin/ipset
 ```
+
+**Step 3:** Save and exit (Ctrl+X, then Y, then Enter in nano)
+
+**Step 4:** Verify it works:
+
+```bash
+sudo -n ipset list
+```
+
+If this command runs without asking for a password, you're all set!
 
 **Advantages:**
 - Works with non-privileged Caddy processes
 - No capability management needed
 - Automatic fallback (no configuration required)
 
-**Note:** Make sure to use `visudo -f /etc/sudoers.d/caddy` to edit the file safely.
+**Important Notes:**
+- The `-n` flag is used by the module to ensure sudo doesn't prompt for a password
+- If you see "sudo requires password" errors, the NOPASSWD configuration is not working
+- Make sure the path `/usr/sbin/ipset` matches your system (check with `which ipset`)
 
 ### Option 3: Run Caddy as root (not recommended for production)
 
@@ -342,21 +363,53 @@ curl -4 http://localhost:20080
    }
    ```
 
-### Permission denied errors
+### "operation not permitted" error
 
-**Cause**: Caddy doesn't have permission to access netlink or run sudo ipset.
+**Error message:**
+```
+Error: loading initial config: ... ipset 'test-ipset' does not exist or cannot be accessed: operation not permitted
+```
+
+**Cause**: Caddy doesn't have permission to access netlink, and the sudo fallback also failed (likely because sudo requires a password).
 
 **Solution**:
-1. Check the logs to see which method is being used ("netlink" or "sudo")
-2. For netlink: Grant CAP_NET_ADMIN capability (see Permissions section)
-3. For sudo fallback: Configure passwordless sudo (see Permissions section)
-4. Verify the ipset kernel module is loaded: `lsmod | grep ip_set`
+
+**Option A - Configure passwordless sudo (easiest):**
+
+1. Test if sudo works without password:
+   ```bash
+   sudo -n ipset list
+   ```
+
+2. If it asks for a password, configure passwordless sudo:
+   ```bash
+   sudo visudo -f /etc/sudoers.d/caddy
+   ```
+
+3. Add this line (replace `your_username` with the user running Caddy):
+   ```
+   your_username ALL=(ALL) NOPASSWD: /usr/sbin/ipset
+   ```
+
+4. Verify it works:
+   ```bash
+   sudo -n ipset list
+   ```
+   Should run without asking for a password.
+
+**Option B - Grant CAP_NET_ADMIN capability (better performance):**
+
+```bash
+sudo setcap cap_net_admin+ep /path/to/caddy
+```
+
+Then restart Caddy. Check logs - you should see "method: netlink" instead of "method: sudo".
 
 ### Sudo password prompts or "sudo: no tty present"
 
-**Cause**: The sudo configuration requires a password, but Caddy can't provide one interactively.
+**Cause**: The sudo configuration requires a password, but Caddy can't provide one interactively (the module uses `sudo -n` for non-interactive mode).
 
-**Solution**: Configure passwordless sudo for the caddy user (see Permissions section, Option 2). Make sure the sudoers file includes `NOPASSWD` for the ipset command.
+**Solution**: Configure passwordless sudo for the user running Caddy (see Permissions section, Option 2). Make sure the sudoers file includes `NOPASSWD` for the ipset command.
 
 ### Module using sudo fallback but you want netlink
 

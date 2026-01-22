@@ -200,8 +200,9 @@ func (m *IpsetMatcher) testIPSudo(ipStr string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ipsetTestTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sudo", "ipset", "test", m.Ipset, ipStr)
-	err := cmd.Run()
+	// Use -n flag for non-interactive sudo (no password prompt)
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "ipset", "test", m.Ipset, ipStr)
+	output, err := cmd.CombinedOutput()
 
 	if err == nil {
 		// Exit code 0 means IP is in the set
@@ -214,10 +215,12 @@ func (m *IpsetMatcher) testIPSudo(ipStr string) (bool, error) {
 		if exitErr.ExitCode() == 1 {
 			return false, nil
 		}
+		// Other exit codes indicate an error
+		return false, fmt.Errorf("ERROR: sudo ipset test failed (exit %d): %s", exitErr.ExitCode(), string(output))
 	}
 
 	// Any other error is a real error
-	return false, fmt.Errorf("ERROR sudo ipset test failed: %w", err)
+	return false, fmt.Errorf("ERROR: sudo ipset test failed: %w", err)
 }
 
 // verifySudoIpset verifies that sudo ipset can access the ipset
@@ -225,10 +228,18 @@ func (m *IpsetMatcher) verifySudoIpset() error {
 	ctx, cancel := context.WithTimeout(context.Background(), ipsetTestTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "sudo", "ipset", "list", m.Ipset)
-	err := cmd.Run()
+	// Use -n flag for non-interactive sudo (no password prompt)
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "ipset", "list", m.Ipset)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("ERROR sudo ipset list failed: %w", err)
+		// Provide helpful error message
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			if exitErr.ExitCode() == 1 {
+				// sudo requires password or user not in sudoers
+				return fmt.Errorf("ERROR: sudo requires password or user not authorized (exit 1). Configure passwordless sudo: add 'your_user ALL=(ALL) NOPASSWD: /usr/sbin/ipset' to /etc/sudoers.d/caddy. Output: %s", string(output))
+			}
+		}
+		return fmt.Errorf("ERROR sudo ipset list failed: %w. Output: %s", err, string(output))
 	}
 	return nil
 }

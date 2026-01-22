@@ -45,8 +45,8 @@ func TestProvision_EmptyIpsetName(t *testing.T) {
 		t.Error("Expected error for empty ipset name")
 	}
 
-	if err.Error() != "ipset name is required" {
-		t.Errorf("Expected 'ipset name is required' error, got '%s'", err.Error())
+	if err.Error() != "ERROR ipset name is required" {
+		t.Errorf("Expected 'ERROR ipset name is required' error, got '%s'", err.Error())
 	}
 }
 
