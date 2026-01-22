@@ -82,35 +82,28 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	}
 
 	// Try to verify the ipset exists using native netlink first
-	_, err := netlink.IpsetList(m.Ipset)
+	works, err := m.verifyNetlinkIpset()
 	if err != nil {
-		// Check if this is a permission error
-		if isPermissionError(err) {
-			m.logger.Warn("netlink access denied, falling back to 'sudo ipset'",
-				zap.String("ipset", m.Ipset),
-				zap.Error(err))
+		return err
+	}
+	if !works {
+		m.logger.Warn("netlink access denied, falling back to 'sudo ipset'")
 
-			// Try sudo ipset as fallback
-			if err := m.verifySudoIpset(); err != nil {
-				return fmt.Errorf("ERROR ipset '%s' cannot be accessed via netlink or sudo: %w", m.Ipset, err)
-			}
-
-			m.method = ipsetMethodSudo
-			m.logger.Info("ipset matcher provisioned using sudo fallback",
-				zap.String("ipset", m.Ipset),
-				zap.String("method", "sudo"))
-			return nil
+		// Try sudo ipset as fallback
+		if err := m.verifySudoIpset(); err != nil {
+			return fmt.Errorf("ERROR ipset '%s' cannot be accessed via netlink or sudo: %w", m.Ipset, err)
 		}
 
-		// Not a permission error, ipset doesn't exist or other error
-		return fmt.Errorf("ERROR ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
+		m.method = ipsetMethodSudo
+		m.logger.Info("ipset matcher provisioned using sudo fallback",
+			zap.String("ipset", m.Ipset))
+		return nil
 	}
 
 	// Netlink access successful
 	m.method = ipsetMethodNetlink
 	m.logger.Info("ipset matcher provisioned using native netlink",
-		zap.String("ipset", m.Ipset),
-		zap.String("method", "netlink"))
+		zap.String("ipset", m.Ipset))
 	return nil
 }
 
@@ -223,13 +216,37 @@ func (m *IpsetMatcher) testIPSudo(ipStr string) (bool, error) {
 	return false, fmt.Errorf("ERROR: sudo ipset test failed: %w", err)
 }
 
+// verifyNetlinkIpset verifies that netlink can access the ipset
+// Uses a lightweight test with a dummy entry instead of listing all entries
+// This is much more efficient for large ipsets with thousands/millions of IPs
+func (m *IpsetMatcher) verifyNetlinkIpset() (bool, error) {
+	dummyEntry := &netlink.IPSetEntry{
+		IP: net.ParseIP("0.0.0.0"),
+	}
+	_, err := netlink.IpsetTest(m.Ipset, dummyEntry)
+	if err == nil {
+		m.logger.Info("Tested access to netlink ipset, success")
+		return true, nil
+	}
+	m.logger.Info("Tested access to netlink ipset, failed with error",
+		zap.Error(err),
+		zap.String("ipset", m.Ipset))
+	// Check if this is a permission error
+	if isPermissionError(err) {
+		return false, nil
+	}
+	// Not a permission error, ipset doesn't exist or other error
+	return false, fmt.Errorf("ERROR ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
+}
+
 // verifySudoIpset verifies that sudo ipset can access the ipset
 func (m *IpsetMatcher) verifySudoIpset() error {
 	ctx, cancel := context.WithTimeout(context.Background(), ipsetTestTimeout)
 	defer cancel()
 
-	// Use -n flag for non-interactive sudo (no password prompt)
-	cmd := exec.CommandContext(ctx, "sudo", "-n", "ipset", "list", m.Ipset)
+	// Use -n flag for sudo is to make it non-interactive (no password prompt)
+	// The -n flag for ipset is to only check the name of the ipset, not list the contents
+	cmd := exec.CommandContext(ctx, "sudo", "-n", "ipset", "list", "-n", m.Ipset)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Provide helpful error message

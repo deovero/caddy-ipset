@@ -275,10 +275,65 @@ INFO ipset matcher provisioned using sudo fallback {"ipset": "blocklist", "metho
 
 ## Testing
 
-### Running Tests
+### Running Tests on Linux
 
 ```bash
 go test -v
+```
+
+### Running Tests on macOS (Docker-based)
+
+Since this module requires Linux kernel features (ipset), you can use Docker for testing on macOS:
+
+#### Quick Start
+
+```bash
+# Run tests (builds image if needed)
+make test-quick
+
+# Or run full test suite with coverage
+make test-full
+```
+
+#### Available Make Commands
+
+```bash
+make help           # Show all available commands
+make docker-build   # Build the Docker test image
+make docker-test    # Run tests in Docker container
+make docker-shell   # Open interactive shell in container
+make docker-clean   # Clean up Docker resources
+make check-ipset    # Check ipset configuration in container
+```
+
+#### Manual Docker Usage
+
+If you prefer to use Docker directly:
+
+```bash
+# Build the test image
+docker-compose build
+
+# Run tests
+docker-compose run --rm caddy-ipset-test ./test-docker.sh
+
+# Open interactive shell
+docker-compose run --rm caddy-ipset-test /bin/bash
+```
+
+Inside the container, you can run tests manually:
+```bash
+# Run all tests
+go test -v ./...
+
+# Run with coverage
+go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+# Run specific test
+go test -v -run TestProvision ./...
+
+# Check ipset configuration
+ipset list
 ```
 
 ### Testing the Module

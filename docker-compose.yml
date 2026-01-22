@@ -1,0 +1,22 @@
+services:
+  caddy-ipset-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: caddy-ipset-test
+    # Required for ipset kernel module access
+    privileged: true
+    volumes:
+      # Mount source code for live development
+      - .:/workspace
+      # Persist Go module cache
+      - go-cache:/go/pkg/mod
+    working_dir: /workspace
+    # Keep container running for interactive use
+    stdin_open: true
+    tty: true
+    command: /bin/bash
+
+volumes:
+  go-cache:
+
