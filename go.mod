@@ -1,6 +1,6 @@
 module github.com/deovero/caddy-ipset
 
-go 1.24
+go 1.25
 
 require (
 	github.com/caddyserver/caddy/v2 v2.10.2

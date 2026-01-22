@@ -7,6 +7,7 @@ import (
 	"context"
 	"net"
 	"net/http/httptest"
+	"syscall"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
@@ -188,4 +189,41 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 
 	// Verify the matcher implements the interface
 	var _ interface{} = m
+}
+
+func TestIsPermissionError(t *testing.T) {
+	testCases := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil error", nil, false},
+		{"EPERM", syscall.EPERM, true},
+		{"EACCES", syscall.EACCES, true},
+		{"ENOENT", syscall.ENOENT, false},
+		{"other error", syscall.EINVAL, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := isPermissionError(tc.err)
+			if result != tc.expected {
+				t.Errorf("Expected %v for %s, got %v", tc.expected, tc.name, result)
+			}
+		})
+	}
+}
+
+func TestMethodString(t *testing.T) {
+	m := &IpsetMatcher{}
+
+	m.method = ipsetMethodNetlink
+	if m.methodString() != "netlink" {
+		t.Errorf("Expected 'netlink', got '%s'", m.methodString())
+	}
+
+	m.method = ipsetMethodSudo
+	if m.methodString() != "sudo" {
+		t.Errorf("Expected 'sudo', got '%s'", m.methodString())
+	}
 }

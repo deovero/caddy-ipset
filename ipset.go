@@ -11,10 +11,14 @@
 package caddy_ipset
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
+	"os/exec"
 	"regexp"
+	"syscall"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -23,10 +27,23 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	// ipsetTestTimeout is the maximum time to wait for ipset test command when using sudo fallback
+	ipsetTestTimeout = 5 * time.Second
+)
+
 var (
 	// ipsetNameRegex validates ipset names to prevent command injection
 	// Allows alphanumeric characters, hyphens, underscores, and dots
 	ipsetNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_\-\.]+$`)
+)
+
+// ipsetMethod represents the method used to access ipset
+type ipsetMethod int
+
+const (
+	ipsetMethodNetlink ipsetMethod = iota // Direct netlink access (preferred)
+	ipsetMethodSudo                       // Fallback to sudo ipset command
 )
 
 func init() {
@@ -40,6 +57,7 @@ type IpsetMatcher struct {
 	Ipset string `json:"ipset,omitempty"`
 
 	logger *zap.Logger
+	method ipsetMethod // The method used to access ipset (netlink or sudo)
 }
 
 // CaddyModule returns the Caddy module information.
@@ -58,19 +76,41 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("ipset name is required")
 	}
 
-	// Validate ipset name to prevent issues with special characters
-	// While we're using netlink now (not shell commands), this is still good practice
+	// Validate ipset name to prevent command injection (important for sudo fallback)
 	if !ipsetNameRegex.MatchString(m.Ipset) {
 		return fmt.Errorf("invalid ipset name '%s': must contain only alphanumeric characters, hyphens, underscores, and dots", m.Ipset)
 	}
 
-	// Verify the ipset exists using native netlink
+	// Try to verify the ipset exists using native netlink first
 	_, err := netlink.IpsetList(m.Ipset)
 	if err != nil {
+		// Check if this is a permission error
+		if isPermissionError(err) {
+			m.logger.Warn("netlink access denied, falling back to sudo ipset",
+				zap.String("ipset", m.Ipset),
+				zap.Error(err))
+
+			// Try sudo ipset as fallback
+			if err := m.verifySudoIpset(); err != nil {
+				return fmt.Errorf("ipset '%s' cannot be accessed via netlink or sudo: %w", m.Ipset, err)
+			}
+
+			m.method = ipsetMethodSudo
+			m.logger.Info("ipset matcher provisioned using sudo fallback",
+				zap.String("ipset", m.Ipset),
+				zap.String("method", "sudo"))
+			return nil
+		}
+
+		// Not a permission error, ipset doesn't exist or other error
 		return fmt.Errorf("ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
 	}
 
-	m.logger.Info("ipset matcher provisioned", zap.String("ipset", m.Ipset))
+	// Netlink access successful
+	m.method = ipsetMethodNetlink
+	m.logger.Info("ipset matcher provisioned using native netlink",
+		zap.String("ipset", m.Ipset),
+		zap.String("method", "netlink"))
 	return nil
 }
 
@@ -107,17 +147,19 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 		return false
 	}
 
-	// Test if the IP is in the ipset using native netlink
-	// This communicates directly with the kernel via netlink instead of shelling out
-	entry := &netlink.IPSetEntry{
-		IP: ip,
+	// Test using the appropriate method
+	var found bool
+	if m.method == ipsetMethodNetlink {
+		found, err = m.testIPNetlink(ip)
+	} else {
+		found, err = m.testIPSudo(remoteIP)
 	}
 
-	found, err := netlink.IpsetTest(m.Ipset, entry)
 	if err != nil {
 		m.logger.Error("Error testing IP against ipset",
 			zap.String("ip", remoteIP),
 			zap.String("ipset", m.Ipset),
+			zap.String("method", m.methodString()),
 			zap.Error(err))
 		return false
 	}
@@ -143,6 +185,74 @@ func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 		}
 	}
 	return nil
+}
+
+// testIPNetlink tests if an IP is in the ipset using native netlink
+func (m *IpsetMatcher) testIPNetlink(ip net.IP) (bool, error) {
+	entry := &netlink.IPSetEntry{
+		IP: ip,
+	}
+	return netlink.IpsetTest(m.Ipset, entry)
+}
+
+// testIPSudo tests if an IP is in the ipset using sudo ipset command
+func (m *IpsetMatcher) testIPSudo(ipStr string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), ipsetTestTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sudo", "ipset", "test", m.Ipset, ipStr)
+	err := cmd.Run()
+
+	if err == nil {
+		// Exit code 0 means IP is in the set
+		return true, nil
+	}
+
+	// Check if it's an exit error
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		// Exit code 1 means IP is not in the set
+		if exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+	}
+
+	// Any other error is a real error
+	return false, fmt.Errorf("sudo ipset test failed: %w", err)
+}
+
+// verifySudoIpset verifies that sudo ipset can access the ipset
+func (m *IpsetMatcher) verifySudoIpset() error {
+	ctx, cancel := context.WithTimeout(context.Background(), ipsetTestTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "sudo", "ipset", "list", m.Ipset)
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("sudo ipset list failed: %w", err)
+	}
+	return nil
+}
+
+// isPermissionError checks if an error is a permission-related error
+func isPermissionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// Check for EPERM or EACCES
+	if errno, ok := err.(syscall.Errno); ok {
+		return errno == syscall.EPERM || errno == syscall.EACCES
+	}
+	// netlink errors might be wrapped
+	return err.Error() == "operation not permitted" ||
+		err.Error() == "permission denied"
+}
+
+// methodString returns a string representation of the ipset method
+func (m *IpsetMatcher) methodString() string {
+	if m.method == ipsetMethodNetlink {
+		return "netlink"
+	}
+	return "sudo"
 }
 
 // Interface guards
