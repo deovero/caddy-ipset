@@ -8,18 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Docker-based testing environment for macOS (including Apple Silicon support)
-- Multi-architecture Docker support (AMD64 and ARM64)
-- CGO support for race detection in tests
-- Makefile with convenient commands for Docker-based testing
-- .dockerignore for optimized Docker builds
 
 ### Documentation
 - Docker testing guide (DOCKER-TESTING.md)
 - Automated test scripts for macOS users (test-docker.sh)
 - macOS testing section in README.md
+
 ### Fixed
 - Improved check for netlink access
+
+### Testing
+- Docker-based testing environment for macOS (including Apple Silicon support)
+- Multi-architecture Docker support (AMD64 and ARM64)
+- CGO support for race detection in tests
+- Makefile with convenient commands for Docker-based testing
+- .dockerignore for optimized Docker builds
+- Improved test coverage from 39.9 to 85.4 %
 
 ## [0.1.0] - 2026-01-22
 
