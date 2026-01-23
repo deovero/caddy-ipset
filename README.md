@@ -1,6 +1,6 @@
 # Caddy IPSet Matcher
 
-A Caddy HTTP matcher module that matches requests based on client IP addresses against Linux ipset lists.
+A Linux-specific Caddy HTTP matcher module that matches client IP against ipset lists.
 
 ## Features
 
