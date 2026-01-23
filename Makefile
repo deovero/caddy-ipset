@@ -103,7 +103,7 @@ vet:
 	fi
 install-hooks:
 	@echo "Installing pre-commit hook..."
-	@cp hooks/pre-commit .git/hooks/pre-commit
+	@cp scripts/pre-commit .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
 	@echo "✓ Pre-commit hook installed"
 	@echo "The hook will automatically format Go files and run go vet before each commit"
