@@ -4,7 +4,7 @@ A Caddy HTTP matcher module that matches requests based on client IP addresses a
 
 ## Features
 
-- **Native kernel communication** - Uses netlink to communicate directly with the Linux kernel (no shell commands)
+- **Native kernel communication** - Uses netlink to communicate directly with the Linux kernel (if possible)
 - **Automatic fallback** - Falls back to `sudo ipset` when running as non-privileged user
 - Match HTTP requests against existing Linux ipset lists
 - Uses Caddy's built-in client IP detection (respects `trusted_proxies` configuration)
