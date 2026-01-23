@@ -91,7 +91,7 @@ go test -v -run TestMatch ./...
 ipset list
 
 # Add test IPs to ipset
-ipset add test-ipset-v4 192.168.1.50
+ipset add test-ipset-v4 192.168.1.100
 
 # Build caddy with the module
 pkill caddy
@@ -99,9 +99,13 @@ xcaddy build --with github.com/deovero/caddy-ipset=/workspace
 ./caddy list-modules
 ./caddy run --config scripts/Caddyfile & sleep 2
 echo
-curl --ipv4 localhost:20080
+curl http://127.0.0.1:20080
 echo
-curl --ipv6 localhost:20080
+curl http://[::1]:20080
+echo
+curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.1'
+echo
+curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
 echo
 pkill caddy
 ```

@@ -3,6 +3,9 @@
 	log {
 		level DEBUG
 	}
+	servers {
+		trusted_proxies static 127.0.0.1
+	}
 }
 :20080 {
 	@match_v4 {

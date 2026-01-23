@@ -235,37 +235,13 @@ To test if the module is working correctly:
 ```bash
 sudo ipset create test-ipset-v4 hash:net family inet
 sudo ipset add test-ipset-v4 127.0.0.1
+sudo ipset add test-ipset-v4 192.168.1.100
 sudo ipset create test-ipset-v6 hash:net family inet6
 sudo ipset add test-ipset-v6 ::1
 ```
 
 2. Configure Caddy with the matcher:
-Create this `Caddyfile` in the directory of the `caddy` binary:
-```caddyfile
-{
-	admin off
-	log {
-		level DEBUG
-	}
-}
-:20080 {
-	@match_v4 {
-		not client_ip ::/0
-		ipset test-ipset-v4
-	}
-	@match_v6 {
-		client_ip ::/0
-		ipset test-ipset-v6
-	}
-	handle @match_v4 {
-		respond "--- IPv4 is in the set ---" 200
-	}
-	handle @match_v6 {
-		respond "--- IPv6 is in the set ---" 200
-	}
-	respond "--- IP is NOT in the sets ---" 200
-}
-```
+Create this [Caddyfile](scripts/Caddyfile).
 
 3. Execute Caddy:
 ```bash
@@ -274,10 +250,14 @@ Create this `Caddyfile` in the directory of the `caddy` binary:
 
 4. Test with curl:
 ```bash
-curl -4 http://localhost:20080
-# Should return "IPv4 is in the set!" if your IP is 127.0.0.1
-curl -6 http://localhost:20080
-# Should return "IPv6 is in the set!" if your IP is ::1
+curl http://127.0.0.1:20080
+# Should return "IPv4 is in the set"
+curl http://[::1]:20080
+# Should return "IPv6 is in the set"
+curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
+# Should return "IPv4 is in the set"
+curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.101'
+# Should return "IP is NOT in the sets"
 ```
 
 ## Troubleshooting

@@ -6,6 +6,7 @@ package caddy_ipset
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"strings"
@@ -50,8 +51,8 @@ func TestProvision_EmptyIpsetName(t *testing.T) {
 		t.Error("Expected error for empty ipset name")
 	}
 
-	if err != nil && err.Error() != "ERROR ipset name is required" {
-		t.Errorf("Expected 'ERROR ipset name is required' error, got '%s'", err.Error())
+	if err != nil && err.Error() != "ipset name is required" {
+		t.Errorf("Expected 'ipset name is required' error, got '%s'", err.Error())
 	}
 }
 
@@ -83,26 +84,6 @@ func TestProvision_InvalidIpsetName(t *testing.T) {
 			err := m.Provision(ctx)
 			if err == nil {
 				t.Errorf("Expected error for invalid ipset name '%s'", tc.ipsetName)
-			}
-		})
-	}
-}
-
-func TestProvision_ValidIpsetName(t *testing.T) {
-	testCases := []string{
-		"valid-ipset",
-		"valid_ipset",
-		"valid.ipset",
-		"ValidIpset123",
-		"ipset-123_test.v1",
-	}
-
-	for _, ipsetName := range testCases {
-		t.Run(ipsetName, func(t *testing.T) {
-			// Note: This will fail if ipset doesn't exist, but validates the name format
-			// In a real test environment, you'd mock the exec.Command
-			if !ipsetNameRegex.MatchString(ipsetName) {
-				t.Errorf("Valid ipset name '%s' failed regex validation", ipsetName)
 			}
 		})
 	}
@@ -182,8 +163,6 @@ func TestIsPermissionError(t *testing.T) {
 		{"EACCES", syscall.EACCES, true},
 		{"ENOENT", syscall.ENOENT, false},
 		{"other error", syscall.EINVAL, false},
-		{"operation not permitted string", errors.New("operation not permitted"), true},
-		{"permission denied string", errors.New("permission denied"), true},
 		{"other string error", errors.New("some other error"), false},
 	}
 
@@ -935,5 +914,108 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 				t.Logf("✓ %s: Correctly checked (Match=%v)", tc.description, result)
 			}
 		})
+	}
+}
+
+// TestProvision_TooLongIpsetName tests that ipset names exceeding max length are rejected
+func TestProvision_TooLongIpsetName(t *testing.T) {
+	// Create a name that exceeds IPSET_MAXNAMELEN (32 characters)
+	longName := "this_is_a_very_long_ipset_name_that_exceeds_the_maximum_allowed_length"
+
+	m := &IpsetMatcher{
+		Ipset: longName,
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err == nil {
+		t.Error("Expected error for ipset name exceeding maximum length")
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "exceeds maximum length") {
+		t.Errorf("Expected error message about exceeding maximum length, got: %v", err)
+	}
+}
+
+// TestFamilyToString_UnknownFamily tests the default case in familyToString
+func TestFamilyToString_UnknownFamily(t *testing.T) {
+	testCases := []struct {
+		family   uint8
+		expected string
+	}{
+		{unix.NFPROTO_IPV4, "inet"},
+		{unix.NFPROTO_IPV6, "inet6"},
+		{99, "unknown(99)"},   // Unknown family code
+		{255, "unknown(255)"}, // Another unknown family code
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.expected, func(t *testing.T) {
+			result := familyToString(tc.family)
+			if result != tc.expected {
+				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
+			}
+		})
+	}
+}
+
+// TestIsPermissionError_WrappedError tests wrapped syscall errors
+func TestIsPermissionError_WrappedError(t *testing.T) {
+	// Test wrapped EPERM error
+	wrappedEPERM := fmt.Errorf("netlink error: %w", syscall.EPERM)
+	if !isPermissionError(wrappedEPERM) {
+		t.Error("Expected wrapped EPERM to be detected as permission error")
+	}
+
+	// Test wrapped EACCES error
+	wrappedEACCES := fmt.Errorf("access denied: %w", syscall.EACCES)
+	if !isPermissionError(wrappedEACCES) {
+		t.Error("Expected wrapped EACCES to be detected as permission error")
+	}
+
+	// Test wrapped non-permission error
+	wrappedEINVAL := fmt.Errorf("invalid argument: %w", syscall.EINVAL)
+	if isPermissionError(wrappedEINVAL) {
+		t.Error("Expected wrapped EINVAL to not be detected as permission error")
+	}
+}
+
+// TestMatch_ClientIPVarKeyNonString tests the case where ClientIPVarKey is not a string
+func TestMatch_ClientIPVarKeyNonString(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipset: "test-ipset-v4",
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+	req.RemoteAddr = "127.0.0.1:8080"
+
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set ClientIPVarKey to a non-string value (e.g., an integer)
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, 12345)
+
+	// This should return false because the type assertion fails
+	result := m.Match(req)
+	if result {
+		t.Error("Expected Match to return false when ClientIPVarKey is not a string")
 	}
 }
