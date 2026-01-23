@@ -233,10 +233,10 @@ To test if the module is working correctly:
 
 1. Create a test ipset:
 ```bash
-sudo ipset create test-v4 hash:net family inet
-sudo ipset add test-v4 127.0.0.1
-sudo ipset create test-v6 hash:net family inet6
-sudo ipset add test-v6 ::1
+sudo ipset create test-ipset-v4 hash:net family inet
+sudo ipset add test-ipset-v4 127.0.0.1
+sudo ipset create test-ipset-v6 hash:net family inet6
+sudo ipset add test-ipset-v6 ::1
 ```
 
 2. Configure Caddy with the matcher:
@@ -250,20 +250,20 @@ Create this `Caddyfile` in the directory of the `caddy` binary:
 }
 :20080 {
 	@match_v4 {
-		not remote_ip ::/0
-		ipset test-v4
+		not client_ip ::/0
+		ipset test-ipset-v4
 	}
 	@match_v6 {
-		remote_ip ::/0
-		ipset test-v6
+		client_ip ::/0
+		ipset test-ipset-v6
 	}
 	handle @match_v4 {
-		respond "IPv4 is in the set!" 200
+		respond "--- IPv4 is in the set ---" 200
 	}
 	handle @match_v6 {
-		respond "IPv6 is in the set!" 200
+		respond "--- IPv6 is in the set ---" 200
 	}
-	respond "IP is NOT in the sets" 200
+	respond "--- IP is NOT in the sets ---" 200
 }
 ```
 

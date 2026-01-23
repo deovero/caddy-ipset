@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **BREAKING**: Removed sudo ipset fallback support - now requires CAP_NET_ADMIN capability
+- Using mutex to make netlink handle thead-safe
+- Skip matching if ipset family doesn't match IP family
 - Performance improvement: Reuse netlink handle across requests to avoid socket creation overhead
 - Simplified codebase by removing all sudo-related code and complexity
 - Updated documentation to focus on `sudo setcap cap_net_admin+ep ./caddy` approach

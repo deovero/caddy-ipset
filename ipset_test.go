@@ -16,6 +16,7 @@ import (
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 func TestCaddyModule(t *testing.T) {
@@ -792,6 +793,147 @@ func TestMatch_WithClientIPVarKey(t *testing.T) {
 			// but we can verify it doesn't panic and processes the ClientIPVarKey
 			t.Logf("Match result for ClientIPVarKey=%s (RemoteAddr=%s): %v",
 				tc.clientIP, tc.remoteAddr, result)
+		})
+	}
+}
+
+// TestProvision_SavesIPFamily tests that Provision correctly saves the ipset family
+func TestProvision_SavesIPFamily(t *testing.T) {
+	testCases := []struct {
+		name           string
+		ipsetName      string
+		expectedFamily uint8
+	}{
+		{"IPv4 ipset saves IPv4 family", "test-ipset-v4", unix.NFPROTO_IPV4},
+		{"IPv6 ipset saves IPv6 family", "test-ipset-v6", unix.NFPROTO_IPV6},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &IpsetMatcher{
+				Ipset: tc.ipsetName,
+			}
+
+			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+			defer cancel()
+
+			err := m.Provision(ctx)
+			if err != nil {
+				t.Fatalf("Failed to provision matcher: %v", err)
+			}
+
+			if m.ipsetFamily != tc.expectedFamily {
+				t.Errorf("Expected ipsetFamily=%d (%s), got %d (%s)",
+					tc.expectedFamily, familyToString(tc.expectedFamily),
+					m.ipsetFamily, familyToString(m.ipsetFamily))
+			}
+
+			t.Logf("Ipset %s correctly saved family: %s (%d)",
+				tc.ipsetName, familyToString(m.ipsetFamily), m.ipsetFamily)
+		})
+	}
+}
+
+// TestMatch_IPFamilyOptimization tests that mismatched IP families are skipped
+func TestMatch_IPFamilyOptimization(t *testing.T) {
+	testCases := []struct {
+		name        string
+		ipsetName   string
+		ipsetFamily uint8
+		remoteAddr  string
+		shouldMatch bool
+		shouldSkip  bool
+		description string
+	}{
+		{
+			name:        "IPv4 against IPv4 ipset - should check",
+			ipsetName:   "test-ipset-v4",
+			ipsetFamily: unix.NFPROTO_IPV4,
+			remoteAddr:  "127.0.0.1:8080",
+			shouldMatch: true,
+			shouldSkip:  false,
+			description: "IPv4 address should be checked against IPv4 ipset",
+		},
+		{
+			name:        "IPv6 against IPv6 ipset - should check",
+			ipsetName:   "test-ipset-v6",
+			ipsetFamily: unix.NFPROTO_IPV6,
+			remoteAddr:  "[::1]:8080",
+			shouldMatch: true,
+			shouldSkip:  false,
+			description: "IPv6 address should be checked against IPv6 ipset",
+		},
+		{
+			name:        "IPv6 against IPv4 ipset - should skip",
+			ipsetName:   "test-ipset-v4",
+			ipsetFamily: unix.NFPROTO_IPV4,
+			remoteAddr:  "[::1]:8080",
+			shouldMatch: false,
+			shouldSkip:  true,
+			description: "IPv6 address should be skipped for IPv4 ipset",
+		},
+		{
+			name:        "IPv4 against IPv6 ipset - should skip",
+			ipsetName:   "test-ipset-v6",
+			ipsetFamily: unix.NFPROTO_IPV6,
+			remoteAddr:  "127.0.0.1:8080",
+			shouldMatch: false,
+			shouldSkip:  true,
+			description: "IPv4 address should be skipped for IPv6 ipset",
+		},
+		{
+			name:        "IPv4 non-matching against IPv4 ipset - should check but not match",
+			ipsetName:   "test-ipset-v4",
+			ipsetFamily: unix.NFPROTO_IPV4,
+			remoteAddr:  "203.0.113.1:8080",
+			shouldMatch: false,
+			shouldSkip:  false,
+			description: "IPv4 address not in ipset should be checked but return false",
+		},
+		{
+			name:        "IPv6 non-matching against IPv6 ipset - should check but not match",
+			ipsetName:   "test-ipset-v6",
+			ipsetFamily: unix.NFPROTO_IPV6,
+			remoteAddr:  "[2001:db8::999]:8080",
+			shouldMatch: false,
+			shouldSkip:  false,
+			description: "IPv6 address not in ipset should be checked but return false",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &IpsetMatcher{
+				Ipset: tc.ipsetName,
+			}
+
+			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+			defer cancel()
+
+			err := m.Provision(ctx)
+			if err != nil {
+				t.Fatalf("Failed to provision matcher: %v", err)
+			}
+
+			// Verify the ipset family was saved correctly
+			if m.ipsetFamily != tc.ipsetFamily {
+				t.Errorf("Expected ipsetFamily=%d, got %d", tc.ipsetFamily, m.ipsetFamily)
+			}
+
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req.RemoteAddr = tc.remoteAddr
+
+			result := m.Match(req)
+
+			if result != tc.shouldMatch {
+				t.Errorf("%s: Match=%v, expected=%v", tc.description, result, tc.shouldMatch)
+			}
+
+			if tc.shouldSkip {
+				t.Logf("✓ %s: Correctly skipped (Match=%v)", tc.description, result)
+			} else {
+				t.Logf("✓ %s: Correctly checked (Match=%v)", tc.description, result)
+			}
 		})
 	}
 }

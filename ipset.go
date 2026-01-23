@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"sync"
 	"syscall"
 
 	"github.com/caddyserver/caddy/v2"
@@ -29,7 +30,7 @@ var (
 )
 
 func init() {
-	caddy.RegisterModule(IpsetMatcher{})
+	caddy.RegisterModule((*IpsetMatcher)(nil))
 }
 
 // IpsetMatcher is a Caddy HTTP matcher that matches requests based on client IP
@@ -40,10 +41,16 @@ type IpsetMatcher struct {
 
 	logger *zap.Logger
 	handle *netlink.Handle
+	// ipsetFamily stores the IP family (IPv4 or IPv6) of the ipset
+	// This is set during Provision and used to skip mismatched IP families during Match
+	ipsetFamily uint8
+	// mu protects concurrent access to the netlink handle
+	// The netlink socket is not thread-safe and must be protected
+	mu sync.Mutex
 }
 
 // CaddyModule returns the Caddy module information.
-func (m IpsetMatcher) CaddyModule() caddy.ModuleInfo {
+func (m *IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.matchers.ipset",
 		New: func() caddy.Module { return new(IpsetMatcher) },
@@ -132,12 +139,32 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 		return false
 	}
 
+	// Check if the IP family matches the ipset family
+	// This optimization avoids unnecessary ipset lookups when the IP family doesn't match
+	// For example, skip checking IPv6 addresses against IPv4 ipsets
+	isIPv4 := ip.To4() != nil
+	if m.ipsetFamily == unix.NFPROTO_IPV4 && !isIPv4 {
+		m.logger.Warn("Skipped matching of IPv6 address against IPv4 ipset",
+			zap.String("ip", clientIP),
+			zap.String("ipset", m.Ipset))
+		return false
+	}
+	if m.ipsetFamily == unix.NFPROTO_IPV6 && isIPv4 {
+		m.logger.Warn("Skipped matching of IPv4 address against IPv6 ipset",
+			zap.String("ip", clientIP),
+			zap.String("ipset", m.Ipset))
+		return false
+	}
+
 	// Match using netlink handle
 	// Use the persistent handle to avoid creating a new socket for each request
+	// Lock the mutex to ensure thread-safe access to the netlink socket
+	m.mu.Lock()
 	found, err := m.handle.IpsetTest(
 		m.Ipset,
 		&netlink.IPSetEntry{IP: ip},
 	)
+	m.mu.Unlock()
 
 	if err != nil {
 		m.logger.Error("Error testing IP against ipset",
@@ -164,6 +191,8 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 func (m *IpsetMatcher) verifyNetlinkIpset() error {
 	result, err := m.handle.IpsetList(m.Ipset)
 	if err == nil {
+		// Save the ipset family for later use in Match
+		m.ipsetFamily = result.Family
 		m.logger.Info("Tested access to netlink ipset, success",
 			zap.String("ipset", m.Ipset),
 			zap.String("type", result.TypeName),

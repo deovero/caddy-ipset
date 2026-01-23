@@ -6,19 +6,18 @@
 }
 :20080 {
 	@match_v4 {
-		not remote_ip ::/0
+		not client_ip ::/0
 		ipset test-ipset-v4
 	}
 	@match_v6 {
-		remote_ip ::/0
+		client_ip ::/0
 		ipset test-ipset-v6
 	}
 	handle @match_v4 {
-		respond "--- IPv4 is in the set. ---" 200
+		respond "--- IPv4 is in the set ---" 200
 	}
 	handle @match_v6 {
-		respond "--- IPv6 is in the set. ---" 200
+		respond "--- IPv6 is in the set ---" 200
 	}
-    respond "--- IPv6 is in the set. ---" 200
+	respond "--- IP is NOT in the sets ---" 200
 }
-ca
