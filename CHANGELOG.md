@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated documentation to focus on `sudo setcap cap_net_admin+ep ./caddy` approach
 - Docker testing now uses setcap to grant CAP_NET_ADMIN to test binary running as non-root user
 - Replaced sudo package with libcap2-bin in Docker image
+- Renamed test ipsets to use `test-ipset-v4` and `test-ipset-v6` naming convention
 
 ### Removed
 - Sudo ipset fallback functionality
@@ -23,7 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 - Now using producing coverage.out
-- Coverage increased to 93.5%
+- Coverage increased to 92.3%
+- Manual testing in Docker using xcaddy
+- Improved Makefile
 
 ## [0.2.0] - 2026-01-23
 

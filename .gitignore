@@ -11,15 +11,12 @@
 # Test binary, built with `go test -c`
 *.test
 
-# Output of the go coverage tool, specifically when used with LiteIDE
-*.out
-
 # Coverage reports
-coverage.out
+*.out
 coverage.html
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Temporary files
+tmp/
 
 # Go workspace file
 go.work

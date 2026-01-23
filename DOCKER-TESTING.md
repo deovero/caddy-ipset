@@ -21,7 +21,7 @@ Docker provides a Linux environment on macOS, allowing you to develop and test t
 The easiest way to run tests:
 
 ```bash
-make test-quick
+make test
 ```
 
 This will:
@@ -36,7 +36,7 @@ This will:
 
 ```bash
 # Quick test (recommended for development)
-make test-quick
+make test
 
 # Full test suite with detailed coverage
 make test-full
@@ -52,16 +52,16 @@ make check-ipset
 
 ```bash
 # Build the Docker image
-make docker-build
+make build
 
 # Open interactive shell in container
 make docker-shell
 
 # Clean up Docker resources
-make docker-clean
+make clean
 
 # Rebuild everything from scratch
-make docker-rebuild
+make rebuild
 
 # Show all available commands
 make help
@@ -91,7 +91,18 @@ go test -v -run TestMatch ./...
 ipset list
 
 # Add test IPs to ipset
-ipset add test-ipset 192.168.1.50
+ipset add test-ipset-v4 192.168.1.50
+
+# Build caddy with the module
+xcaddy build --with github.com/deovero/caddy-ipset=/workspace
+./caddy list-modules
+./caddy run --config scripts/Caddyfile & sleep 2
+echo
+curl --ipv4 localhost:20080
+echo
+curl --ipv6 localhost:20080
+echo
+pkill caddy
 ```
 
 ## How It Works
@@ -120,11 +131,11 @@ ipset add test-ipset 192.168.1.50
 
 The container automatically creates these test ipsets:
 
-- `test-ipset`: Contains 127.0.0.1, 192.168.1.100 (IPv4)
+- `test-ipset-v4`: Contains 127.0.0.1, 192.168.1.100 (IPv4)
 - `test-ipset-v6`: Contains ::1, 2001:db8::1, fe80::1 (IPv6)
-- `blocklist`: Contains 10.0.0.1 (IPv4)
+- `blocklist-v4`: Contains 10.0.0.1 (IPv4)
 - `blocklist-v6`: Contains 2001:db8::bad (IPv6)
-- `empty`: Empty (IPv4, for testing)
+- `empty-v4`: Empty (IPv4, for testing)
 - `empty-v6`: Empty (IPv6, for testing)
 
 ## Troubleshooting
@@ -153,7 +164,7 @@ make docker-shell
 
 **Solution**: The scripts/Dockerfile uses layer caching. If you need to rebuild:
 ```bash
-make docker-rebuild
+make rebuild
 ```
 
 ### Changes not reflected in tests
@@ -180,7 +191,7 @@ To free up disk space:
 
 ```bash
 # Remove containers and volumes
-make docker-clean
+make clean
 
 # Remove everything including images
 docker-compose down -v --rmi all

@@ -1,27 +1,27 @@
-.PHONY: help docker-build docker-test docker-shell docker-clean docker-rebuild test-quick test-full
+.PHONY: help test format vet clean build rebuild clean-full docker-shell docker-test test-full test-specific coverage coverage-html check-ipset
 
 # Default target
 help:
 	@echo "Docker-based testing for caddy-ipset (macOS compatible)"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  make docker-build    - Build the Docker test image"
-	@echo "  make docker-test     - Run tests in Docker container"
-	@echo "  make test-quick      - Quick test (build + run tests)"
-	@echo "  make test-full       - Full test suite with coverage"
-	@echo "  make clean-full      - Clean first, then full test suite with coverage"
-	@echo "  make coverage        - Generate coverage.out file"
-	@echo "  make coverage-html   - Generate HTML coverage report (opens in browser)"
-	@echo "  make docker-shell    - Open interactive shell in container"
-	@echo "  make docker-clean    - Remove Docker containers and images"
-	@echo "  make docker-rebuild  - Clean and rebuild everything"
-	@echo ""
-	@echo "Development targets:"
-	@echo "  make format          - Format all Go files with gofmt"
-	@echo "  make vet             - Run go vet on all files"
+	@echo "  make test              - Quick test (build + run tests)"
+	@echo "  make format            - Format all Go files with gofmt"
+	@echo "  make vet               - Run go vet on all files"
+	@echo "  make clean             - Remove Docker containers and images"
+	@echo "  make build             - Build the Docker test image"
+	@echo "  make rebuild           - Clean and rebuild everything"
+	@echo "  make clean-full        - Clean first, then full test suite with coverage"
+	@echo "  make docker-shell      - Open interactive shell in container"
+	@echo "  make docker-test       - Run tests in Docker container"
+	@echo "  make test-full         - Full test suite with coverage"
+	@echo "  make test-specific     - Run specific test (use TEST=TestName)"
+	@echo "  make coverage          - Generate coverage.out file"
+	@echo "  make coverage-html     - Generate HTML coverage report (opens in browser)"
+	@echo "  make check-ipset       - Check ipset configuration in container"
 
 # Build the Docker image
-docker-build:
+build:
 	@echo "Building Docker test image..."
 	docker-compose build
 
@@ -31,10 +31,10 @@ docker-test:
 	docker-compose run --rm caddy-ipset-test /workspace/scripts/test-docker.sh
 
 # Quick test - build and run
-test-quick: docker-build docker-test
+test: build docker-test
 
 # Full test suite with detailed output
-test-full: docker-build
+test-full: build
 	@echo "Running full test suite..."
 	docker-compose run --rm caddy-ipset-test bash -c "\
 		echo '=== Running go vet ===' && \
@@ -50,7 +50,7 @@ test-full: docker-build
 		go build -v ./..."
 
 # Clean first, then full test suite with coverage
-clean-full: docker-clean test-full
+clean-full: clean test-full
 
 # Open interactive shell in container
 docker-shell:
@@ -59,13 +59,13 @@ docker-shell:
 	docker-compose run --rm caddy-ipset-test /bin/bash
 
 # Clean up Docker resources
-docker-clean:
+clean:
 	@echo "Cleaning up Docker resources..."
 	docker-compose down -v
 	docker rmi caddy-ipset-test 2>/dev/null || true
 
 # Rebuild everything from scratch
-docker-rebuild: docker-clean docker-build
+rebuild: clean build
 	@echo "Rebuild complete!"
 
 # Run specific test
@@ -117,7 +117,7 @@ format:
 vet:
 	@echo "Running go vet..."
 	@if command -v go >/dev/null 2>&1; then \
-		go vet ./... 2>/dev/null && echo "✓ go vet passed" || echo "Note: Run 'make test-quick' to run go vet in Docker"; \
+		go vet ./... 2>/dev/null && echo "✓ go vet passed" || echo "Note: Run 'make test' to run go vet in Docker"; \
 	else \
-		echo "Note: Go not found. Run 'make test-quick' to run go vet in Docker"; \
+		echo "Note: Go not found. Run 'make test' to run go vet in Docker"; \
 	fi

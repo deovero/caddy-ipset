@@ -70,7 +70,7 @@ if [ "$OS" = "Linux" ]; then
     echo -e "${GREEN}✓ go vet passed${NC}"
 else
     echo -e "${YELLOW}Skipping go vet (requires Linux due to build constraints)${NC}"
-    echo -e "${YELLOW}Run 'make test-quick' to test in Docker before pushing${NC}"
+    echo -e "${YELLOW}Run 'make test' to test in Docker before pushing${NC}"
 fi
 
 echo -e "${GREEN}✓ Pre-commit checks passed${NC}"

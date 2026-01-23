@@ -8,10 +8,12 @@ import (
 	"errors"
 	"net"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
@@ -107,7 +109,7 @@ func TestProvision_ValidIpsetName(t *testing.T) {
 
 func TestMatch_InvalidRemoteAddr(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
+		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
 
@@ -122,7 +124,7 @@ func TestMatch_InvalidRemoteAddr(t *testing.T) {
 
 func TestMatch_InvalidIP(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
+		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
 
@@ -197,16 +199,16 @@ func TestIsPermissionError(t *testing.T) {
 // TestProvision_NetlinkSuccess tests successful provisioning with netlink access
 func TestProvision_NetlinkSuccess(t *testing.T) {
 	// This test requires an actual ipset to exist
-	// It will use the test-ipset created by the Docker environment
+	// It will use the test-ipset-v4 created by the Docker environment
 	m := &IpsetMatcher{
-		Ipset: "test-ipset",
+		Ipset: "test-ipset-v4",
 	}
 
 	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
 	defer cancel()
 
 	err := m.Provision(ctx)
-	// This may fail if running outside Docker or if test-ipset doesn't exist
+	// This may fail if running outside Docker or if test-ipset-v4 doesn't exist
 	if err != nil {
 		t.Logf("Netlink provisioning failed (expected in some environments): %v", err)
 	} else {
@@ -235,16 +237,16 @@ func TestProvision_NonExistentIpset(t *testing.T) {
 // TestMatch_WithNetlinkMethod tests Match with netlink method
 func TestMatch_WithNetlinkMethod(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
+		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
 
-	// Test with an IP that should be in test-ipset (127.0.0.1)
+	// Test with an IP that should be in test-ipset-v4 (127.0.0.1)
 	req := httptest.NewRequest("GET", "http://example.com", nil)
 	req.RemoteAddr = "127.0.0.1:12345"
 
 	// This will attempt to use netlink
-	// Result depends on whether test-ipset exists and contains 127.0.0.1
+	// Result depends on whether test-ipset-v4 exists and contains 127.0.0.1
 	result := m.Match(req)
 	// We can't assert the result without knowing the ipset state
 	// But we can verify it doesn't panic
@@ -254,7 +256,7 @@ func TestMatch_WithNetlinkMethod(t *testing.T) {
 // TestMatch_IPWithoutPort tests Match with IP address without port
 func TestMatch_IPWithoutPort(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
+		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
 
@@ -270,7 +272,7 @@ func TestMatch_IPWithoutPort(t *testing.T) {
 // TestMatch_IPv6 tests Match with IPv6 address
 func TestMatch_IPv6(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
+		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
 
@@ -281,8 +283,88 @@ func TestMatch_IPv6(t *testing.T) {
 	t.Logf("Match result for IPv6: %v", result)
 }
 
+func TestUnmarshalCaddyfile(t *testing.T) {
+	testCases := []struct {
+		name        string
+		input       string
+		expectError bool
+		expectedSet string
+	}{
+		{
+			name:        "valid ipset name",
+			input:       "ipset test-ipset-v4",
+			expectError: false,
+			expectedSet: "test-ipset-v4",
+		},
+		{
+			name:        "valid ipset name with underscores",
+			input:       "ipset my_ipset_123",
+			expectError: false,
+			expectedSet: "my_ipset_123",
+		},
+		{
+			name:        "missing argument",
+			input:       "ipset",
+			expectError: true,
+			expectedSet: "",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &IpsetMatcher{}
+			d := caddyfile.NewTestDispenser(tc.input)
+			err := m.UnmarshalCaddyfile(d)
+
+			if tc.expectError && err == nil {
+				t.Error("Expected error but got none")
+			}
+			if !tc.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			if !tc.expectError && m.Ipset != tc.expectedSet {
+				t.Errorf("Expected ipset '%s', got '%s'", tc.expectedSet, m.Ipset)
+			}
+		})
+	}
+}
+
+// TestProvision_PermissionError tests the permission error path
+// This test is designed to be run by scripts/test-permission-error.sh
+// which manages CAP_NET_ADMIN capability at the root level
+func TestProvision_PermissionError(t *testing.T) {
+	// Try to provision - behavior depends on whether CAP_NET_ADMIN is granted
+	m := &IpsetMatcher{
+		Ipset: "test-ipset-v4",
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+
+	// If there's an error, verify it's the expected permission error
+	if err != nil {
+		// Verify the error message contains the setcap instruction
+		expectedMsg := "sudo setcap cap_net_admin+ep ./caddy"
+		if !strings.Contains(err.Error(), expectedMsg) {
+			t.Errorf("Expected error to contain '%s', got: %v", expectedMsg, err)
+		}
+
+		// Verify it's specifically a permission error
+		if !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("Expected error to contain 'permission denied', got: %v", err)
+		}
+
+		t.Logf("Successfully triggered permission error: %v", err)
+	} else {
+		// No error means CAP_NET_ADMIN is granted and ipset access works
+		t.Logf("Successfully provisioned with CAP_NET_ADMIN capability")
+	}
+}
+
 // TestProvision_FullIntegration tests the full provisioning flow
-// This test requires the Docker environment with test-ipset created
+// This test requires the Docker environment with test-ipset-v4 created
 func TestProvision_FullIntegration(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -291,17 +373,17 @@ func TestProvision_FullIntegration(t *testing.T) {
 	}{
 		{
 			name:        "existing ipset",
-			ipsetName:   "test-ipset",
+			ipsetName:   "test-ipset-v4",
 			expectError: false,
 		},
 		{
 			name:        "another existing ipset",
-			ipsetName:   "blocklist",
+			ipsetName:   "blocklist-v4",
 			expectError: false,
 		},
 		{
 			name:        "empty ipset",
-			ipsetName:   "empty",
+			ipsetName:   "empty-4",
 			expectError: false,
 		},
 		{
@@ -338,11 +420,11 @@ func TestProvision_FullIntegration(t *testing.T) {
 }
 
 // TestMatch_FullIntegration tests the full Match flow with actual ipset
-// This test requires the Docker environment with test-ipset containing specific IPs
+// This test requires the Docker environment with test-ipset-v4 containing specific IPs
 func TestMatch_FullIntegration(t *testing.T) {
 	// First provision the matcher
 	m := &IpsetMatcher{
-		Ipset: "test-ipset",
+		Ipset: "test-ipset-v4",
 	}
 
 	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
@@ -364,13 +446,13 @@ func TestMatch_FullIntegration(t *testing.T) {
 			name:        "localhost should match",
 			remoteAddr:  "127.0.0.1:12345",
 			expectMatch: true,
-			description: "127.0.0.1 is in test-ipset",
+			description: "127.0.0.1 is in test-ipset-v4",
 		},
 		{
 			name:        "test IP should match",
 			remoteAddr:  "192.168.1.100:8080",
 			expectMatch: true,
-			description: "192.168.1.100 is in test-ipset",
+			description: "192.168.1.100 is in test-ipset-v4",
 		},
 		{
 			name:        "random IP should not match",
@@ -404,7 +486,7 @@ func TestMatch_ErrorHandling(t *testing.T) {
 		{
 			name: "invalid IP format",
 			matcher: &IpsetMatcher{
-				Ipset:  "test-ipset",
+				Ipset:  "test-ipset-v4",
 				logger: zap.NewNop(),
 			},
 			remoteAddr:  "not-an-ip",
@@ -413,7 +495,7 @@ func TestMatch_ErrorHandling(t *testing.T) {
 		{
 			name: "empty remote addr",
 			matcher: &IpsetMatcher{
-				Ipset:  "test-ipset",
+				Ipset:  "test-ipset-v4",
 				logger: zap.NewNop(),
 			},
 			remoteAddr:  "",
@@ -422,7 +504,7 @@ func TestMatch_ErrorHandling(t *testing.T) {
 		{
 			name: "malformed IP with port",
 			matcher: &IpsetMatcher{
-				Ipset:  "test-ipset",
+				Ipset:  "test-ipset-v4",
 				logger: zap.NewNop(),
 			},
 			remoteAddr:  "999.999.999.999:8080",
@@ -559,10 +641,10 @@ func TestMatch_MixedIPv4AndIPv6(t *testing.T) {
 		remoteAddr  string
 		shouldMatch bool
 	}{
-		{"IPv4 against IPv4 ipset", "test-ipset", "127.0.0.1:8080", true},
+		{"IPv4 against IPv4 ipset", "test-ipset-v4", "127.0.0.1:8080", true},
 		{"IPv6 against IPv6 ipset", "test-ipset-v6", "[::1]:8080", true},
 		{"IPv4 against IPv6 ipset", "test-ipset-v6", "127.0.0.1:8080", false},
-		{"IPv6 against IPv4 ipset", "test-ipset", "[::1]:8080", false},
+		{"IPv6 against IPv4 ipset", "test-ipset-v4", "[::1]:8080", false},
 	}
 
 	for _, tc := range testCases {
@@ -646,7 +728,7 @@ func TestMatch_IPv6EdgeCases(t *testing.T) {
 // from the request context when it's set (e.g., by Caddy's trusted_proxies logic)
 func TestMatch_WithClientIPVarKey(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
+		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
 

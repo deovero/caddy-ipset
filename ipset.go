@@ -15,6 +15,7 @@ import (
 	"syscall"
 
 	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
@@ -65,8 +66,6 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		return err
 	}
 
-	m.logger.Info("ipset matcher provisioned using netlink",
-		zap.String("ipset", m.Ipset))
 	return nil
 }
 
@@ -129,15 +128,14 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 }
 
 // verifyNetlinkIpset verifies that netlink can access the ipset
-// Uses a lightweight test with a dummy entry instead of listing all entries
-// This is much more efficient for large ipsets with thousands/millions of IPs
 func (m *IpsetMatcher) verifyNetlinkIpset() error {
-	dummyEntry := &netlink.IPSetEntry{
-		IP: net.ParseIP("0.0.0.0"),
-	}
-	_, err := netlink.IpsetTest(m.Ipset, dummyEntry)
+	result, err := netlink.IpsetList(m.Ipset)
 	if err == nil {
-		m.logger.Info("Tested access to netlink ipset, success")
+		m.logger.Info("Tested access to netlink ipset, success",
+			zap.String("ipset", m.Ipset),
+			zap.String("type", result.TypeName),
+			zap.String("family", familyToString(result.Family)),
+		)
 		return nil
 	}
 	// Check if this is a permission error
@@ -146,6 +144,16 @@ func (m *IpsetMatcher) verifyNetlinkIpset() error {
 	}
 	// Not a permission error, ipset doesn't exist or other error
 	return fmt.Errorf("ERROR ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
+}
+
+// UnmarshalCaddyfile implements caddyfile.Unmarshaler.
+func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	for d.Next() {
+		if !d.Args(&m.Ipset) {
+			return d.ArgErr()
+		}
+	}
+	return nil
 }
 
 // isPermissionError checks if an error is a permission-related error
@@ -162,7 +170,21 @@ func isPermissionError(err error) bool {
 		err.Error() == "permission denied"
 }
 
+// familyToString converts the ipset family code to a readable string
+// Family codes are from NFPROTO_* constants in Linux kernel
+func familyToString(family uint8) string {
+	switch family {
+	case 2: // NFPROTO_IPV4
+		return "inet"
+	case 10: // NFPROTO_IPV6
+		return "inet6"
+	default:
+		return fmt.Sprintf("unknown(%d)", family)
+	}
+}
+
 // Interface guards
 var (
-	_ caddy.Provisioner = (*IpsetMatcher)(nil)
+	_ caddy.Provisioner     = (*IpsetMatcher)(nil)
+	_ caddyfile.Unmarshaler = (*IpsetMatcher)(nil)
 )

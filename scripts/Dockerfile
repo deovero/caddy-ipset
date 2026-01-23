@@ -14,6 +14,11 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     gcc \
     libc6-dev \
+    sudo \
+    debian-keyring \
+    debian-archive-keyring \
+    apt-transport-https \
+    gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Go 1.25
@@ -34,6 +39,13 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV GOPATH=/go
 ENV PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV CGO_ENABLED=1
+
+# Install xcaddy
+RUN curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg && \
+    curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/debian.deb.txt' | tee /etc/apt/sources.list.d/caddy-xcaddy.list && \
+    apt-get update && \
+    apt-get install -y xcaddy && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user for testing
 RUN useradd -m -s /bin/bash testuser

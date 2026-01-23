@@ -67,11 +67,19 @@ Block requests from IPs in an ipset:
 
 ```caddyfile
 example.com {
-    @blocked {
-        ipset fail2ban-blocklist
+    @blocked_v4 {
+        not remote_ip ::/0  # Only match IPv4
+        ipset blocklist-v4 
+    }
+    @blocked_v6 {
+        remote_ip ::/0  # Only match IPv6
+        ipset blocklist-v6
     }
 
-    handle @blocked {
+    handle @blocked_v4 {
+        respond "Access Denied" 403
+    }
+    handle @blocked_v6 {
         respond "Access Denied" 403
     }
 
@@ -95,30 +103,6 @@ admin.example.com {
 }
 ```
 
-#### Using with Trusted Proxies
-
-When behind a proxy (like Cloudflare, nginx, or a load balancer), configure `trusted_proxies` to get the real client IP:
-
-```caddyfile
-{
-    servers {
-        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22
-    }
-}
-
-example.com {
-    @blocked {
-        ipset fail2ban-blocklist
-    }
-
-    handle @blocked {
-        respond "Access Denied" 403
-    }
-
-    respond "Welcome!" 200
-}
-```
-
 ### JSON Configuration
 
 ```json
@@ -131,7 +115,7 @@ example.com {
             {
               "match": [
                 {
-                  "ipset": "fail2ban-blocklist"
+                  "ipset": "blocklist-v4"
                 }
               ],
               "handle": [
@@ -155,65 +139,33 @@ example.com {
 Before using this module, you need to create an ipset on your Linux system:
 
 ```bash
-# Create a hash:ip type ipset
-sudo ipset create fail2ban-blocklist hash:ip
+# Create a hash:net type ipset
+sudo ipset create blocklist-v4 hash:net
 
 # Add IPs to the set
-sudo ipset add fail2ban-blocklist 192.168.1.100
-sudo ipset add fail2ban-blocklist 10.0.0.50
+sudo ipset add blocklist-v4 192.168.1.100
+sudo ipset add blocklist-v4 10.0.0.50
 
 # List the ipset
-sudo ipset list fail2ban-blocklist
-
-# Save ipset (persist across reboots)
-sudo ipset save > /etc/ipset.conf
+sudo ipset list blocklist-v4 
 ```
 
 ### Supported IPSet Types
 
 This module works with various ipset types:
-- `hash:ip` - Individual IP addresses (IPv4 or IPv6)
 - `hash:net` - Network ranges (CIDR notation)
+- `hash:ip` - Individual IP addresses (IPv4 or IPv6)
 - Other hash types that support IP matching
 
 To restore ipset on boot, add to `/etc/rc.local` or create a systemd service:
 
-```bash
-sudo ipset restore < /etc/ipset.conf
-```
-
-## Integration with Fail2Ban
-
-This plugin works great with Fail2Ban. Configure Fail2Ban to use ipset:
-
-```ini
-# /etc/fail2ban/jail.local
-[DEFAULT]
-banaction = iptables-ipset-proto4
-
-[caddy-auth]
-enabled = true
-port = http,https
-filter = caddy-auth
-logpath = /var/log/caddy/access.log
-maxretry = 5
-bantime = 3600
-```
-
 ## Logging
 
-The module provides detailed logging:
+The module provides detailed logging, examples:
 
-- **Info**:
-  - When the module is provisioned
-  - When an IP matches the ipset
-- **Debug**: When an IP is not in the ipset
+- **Info**: When the module is provisioned
+- **Debug**: When an IP is matched against the ipset, including the result
 - **Error**: When there are issues parsing IPs or accessing ipset
-
-Example log output:
-```
-INFO ipset matcher provisioned using netlink {"ipset": "blocklist"}
-```
 
 ## Testing
 
@@ -231,7 +183,7 @@ Since this module requires Linux kernel features (ipset), you can use Docker for
 
 ```bash
 # Run tests (builds image if needed)
-make test-quick
+make test
 
 # Or run full test suite with coverage
 make test-full
@@ -241,14 +193,14 @@ make test-full
 
 ```bash
 make help           # Show all available commands
-make docker-build   # Build the Docker test image
-make docker-test    # Run tests in Docker container
+make test           # Run tests in Docker container
+make test-full      # Run full test suite with coverage
 make coverage       # Generate coverage.out file
 make coverage-html  # Generate HTML coverage report (opens in browser)
 make docker-shell   # Open interactive shell in container
-make docker-clean   # Clean up Docker resources
-make check-ipset    # Check ipset configuration in container
+make clean          # Clean up Docker resources
 ```
+For the full list of commands, run `make help`.
 
 #### Manual Docker Usage
 
@@ -322,7 +274,7 @@ Create this `Caddyfile` in the directory of the `caddy` binary:
 
 3. Execute Caddy:
 ```bash
-./caddy run
+./caddy run --config Caddyfile
 ```
 
 4. Test with curl:
@@ -357,15 +309,7 @@ curl -6 http://localhost:20080
 **Solution**:
 1. Check Caddy logs to see which IP is being tested
 2. Configure `trusted_proxies` in your Caddyfile to extract the real client IP from proxy headers
-3. Example for Cloudflare:
-   ```caddyfile
-   {
-       servers {
-           trusted_proxies static cloudflare
-       }
-   }
-   ```
-4. For custom proxies, specify their IP ranges:
+3. Specify the IP ranges of the proxy servers:
    ```caddyfile
    {
        servers {
@@ -378,7 +322,7 @@ curl -6 http://localhost:20080
 
 **Error message:**
 ```
-Error: loading initial config: ... ipset 'test-ipset' cannot be accessed: permission denied
+Error: loading initial config: ... ipset 'test-ipset-v4' cannot be accessed: permission denied
 ```
 
 **Cause**: Caddy doesn't have CAP_NET_ADMIN capability to access netlink.
@@ -417,18 +361,6 @@ The pre-commit hook will:
 - Run `go vet` to catch common mistakes
 - Re-stage formatted files automatically
 - Prevent commits if there are formatting or vet errors
-
-### Manual Formatting
-
-If you want to format files manually without committing:
-
-```bash
-# Format all Go files
-gofmt -s -w .
-
-# Run go vet
-go vet ./...
-```
 
 ### Running Tests
 

@@ -38,9 +38,9 @@ go vet ./...
 echo -e "${GREEN}✓ go vet passed${NC}"
 echo ""
 
-# Build the test binary first
-echo -e "${YELLOW}Building test binary...${NC}"
-go test -c -o /tmp/caddy-ipset.test
+# Build the test binary first with race detector and coverage
+echo -e "${YELLOW}Building test binary with race detector and coverage...${NC}"
+go test -c -race -cover -o /tmp/caddy-ipset.test
 BUILD_EXIT_CODE=$?
 
 if [ $BUILD_EXIT_CODE -ne 0 ]; then
@@ -58,7 +58,7 @@ echo ""
 
 # Run tests as non-root user with CAP_NET_ADMIN capability
 echo -e "${YELLOW}Running tests as non-root user (testuser) with CAP_NET_ADMIN...${NC}"
-su - testuser -c "cd /workspace && /tmp/caddy-ipset.test -test.v -test.race -test.coverprofile=/workspace/coverage.out"
+su - testuser -c "cd /workspace && /tmp/caddy-ipset.test -test.v -test.coverprofile=/workspace/coverage.out"
 TEST_EXIT_CODE=$?
 
 if [ $TEST_EXIT_CODE -eq 0 ]; then
