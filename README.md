@@ -199,7 +199,7 @@ The module automatically selects the best access method based on available permi
 This enables direct netlink access for maximum performance:
 
 ```bash
-sudo setcap cap_net_admin+ep /usr/bin/caddy
+sudo setcap cap_net_admin+ep ./caddy
 ```
 
 **Advantages:**
