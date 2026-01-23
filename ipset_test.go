@@ -89,33 +89,77 @@ func TestProvision_InvalidIpsetName(t *testing.T) {
 	}
 }
 
-func TestMatch_InvalidRemoteAddr(t *testing.T) {
+func TestMatchWithError_InvalidRemoteAddr(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset:  "test-ipset-v4",
 		logger: zap.NewNop(),
 	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
 	req.RemoteAddr = "invalid-address"
 
-	result := m.Match(req)
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set an invalid ClientIPVarKey
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "invalid-address")
+
+	result, err := m.MatchWithError(req)
+	if err == nil {
+		t.Error("Expected error for invalid remote address")
+	}
 	if result {
-		t.Error("Expected Match to return false for invalid remote address")
+		t.Error("Expected MatchWithError to return false for invalid remote address")
 	}
 }
 
-func TestMatch_InvalidIP(t *testing.T) {
+func TestMatchWithError_InvalidIP(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset-v4",
-		logger: zap.NewNop(),
+		Ipset: "test-ipset-v4",
 	}
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.Header.Set("Cf-Connecting-Ip", "not-an-ip")
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
 
-	result := m.Match(req)
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set an invalid IP in ClientIPVarKey
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "not-an-ip")
+
+	result, err := m.MatchWithError(req)
+	if err == nil {
+		t.Error("Expected error for invalid IP")
+	}
 	if result {
-		t.Error("Expected Match to return false for invalid IP")
+		t.Error("Expected MatchWithError to return false for invalid IP")
 	}
 }
 
@@ -214,53 +258,115 @@ func TestProvision_NonExistentIpset(t *testing.T) {
 	}
 }
 
-// TestMatch_WithNetlinkMethod tests Match with netlink method
-func TestMatch_WithNetlinkMethod(t *testing.T) {
+// TestMatchWithError_WithNetlinkMethod tests MatchWithError with netlink method
+func TestMatchWithError_WithNetlinkMethod(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset-v4",
-		logger: zap.NewNop(),
+		Ipset: "test-ipset-v4",
 	}
 
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
 	// Test with an IP that should be in test-ipset-v4 (127.0.0.1)
 	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "127.0.0.1:12345"
+
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set the client IP
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "127.0.0.1")
 
 	// This will attempt to use netlink
 	// Result depends on whether test-ipset-v4 exists and contains 127.0.0.1
-	result := m.Match(req)
+	result, err := m.MatchWithError(req)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
 	// We can't assert the result without knowing the ipset state
 	// But we can verify it doesn't panic
-	t.Logf("Match result for 127.0.0.1: %v", result)
+	t.Logf("MatchWithError result for 127.0.0.1: %v", result)
 }
 
-// TestMatch_IPWithoutPort tests Match with IP address without port
-func TestMatch_IPWithoutPort(t *testing.T) {
+// TestMatchWithError_IPWithoutPort tests MatchWithError with IP address without port
+func TestMatchWithError_IPWithoutPort(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset-v4",
-		logger: zap.NewNop(),
+		Ipset: "test-ipset-v4",
 	}
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	// Set RemoteAddr to just an IP without port
-	req.RemoteAddr = "192.168.1.1"
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
 
-	// This should handle the case where SplitHostPort fails
-	result := m.Match(req)
-	t.Logf("Match result for IP without port: %v", result)
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set an IP without port
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "192.168.1.1")
+
+	// This should handle the case where there's no port
+	result, err := m.MatchWithError(req)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	t.Logf("MatchWithError result for IP without port: %v", result)
 }
 
-// TestMatch_IPv6 tests Match with IPv6 address
-func TestMatch_IPv6(t *testing.T) {
+// TestMatchWithError_IPv6 tests MatchWithError with IPv6 address
+func TestMatchWithError_IPv6(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset-v4",
-		logger: zap.NewNop(),
+		Ipset: "test-ipset-v4",
 	}
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "[2001:db8::1]:8080"
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
 
-	result := m.Match(req)
-	t.Logf("Match result for IPv6: %v", result)
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set IPv6 address
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "2001:db8::1")
+
+	result, err := m.MatchWithError(req)
+	// Should return false (no error) because IPv6 doesn't match IPv4 ipset
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	t.Logf("MatchWithError result for IPv6 against IPv4 ipset: %v", result)
 }
 
 func TestUnmarshalCaddyfile(t *testing.T) {
@@ -399,9 +505,9 @@ func TestProvision_FullIntegration(t *testing.T) {
 	}
 }
 
-// TestMatch_FullIntegration tests the full Match flow with actual ipset
+// TestMatchWithError_FullIntegration tests the full MatchWithError flow with actual ipset
 // This test requires the Docker environment with test-ipset-v4 containing specific IPs
-func TestMatch_FullIntegration(t *testing.T) {
+func TestMatchWithError_FullIntegration(t *testing.T) {
 	// First provision the matcher
 	m := &IpsetMatcher{
 		Ipset: "test-ipset-v4",
@@ -415,28 +521,31 @@ func TestMatch_FullIntegration(t *testing.T) {
 		t.Skipf("Skipping integration test - provisioning failed: %v", err)
 		return
 	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
 
 	testCases := []struct {
 		name        string
-		remoteAddr  string
+		clientIP    string
 		expectMatch bool
 		description string
 	}{
 		{
 			name:        "localhost should match",
-			remoteAddr:  "127.0.0.1:12345",
+			clientIP:    "127.0.0.1",
 			expectMatch: true,
 			description: "127.0.0.1 is in test-ipset-v4",
 		},
 		{
 			name:        "test IP should match",
-			remoteAddr:  "192.168.1.100:8080",
+			clientIP:    "192.168.1.100",
 			expectMatch: true,
 			description: "192.168.1.100 is in test-ipset-v4",
 		},
 		{
 			name:        "random IP should not match",
-			remoteAddr:  "203.0.113.1:443",
+			clientIP:    "203.0.113.1",
 			expectMatch: false,
 			description: "203.0.113.1 is not in test-ipset",
 		},
@@ -445,61 +554,92 @@ func TestMatch_FullIntegration(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
 
-			result := m.Match(req)
-			t.Logf("%s: Match=%v (expected=%v)", tc.description, result, tc.expectMatch)
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set the client IP
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
+			t.Logf("%s: MatchWithError=%v (expected=%v)", tc.description, result, tc.expectMatch)
 			// Note: We log but don't assert because the actual ipset contents
 			// may vary depending on the test environment
 		})
 	}
 }
 
-// TestMatch_ErrorHandling tests error handling in Match
-func TestMatch_ErrorHandling(t *testing.T) {
+// TestMatchWithError_ErrorHandling tests error handling in MatchWithError
+func TestMatchWithError_ErrorHandling(t *testing.T) {
 	testCases := []struct {
 		name        string
-		matcher     *IpsetMatcher
-		remoteAddr  string
+		ipsetName   string
+		clientIP    string
+		expectError bool
 		expectFalse bool
 	}{
 		{
-			name: "invalid IP format",
-			matcher: &IpsetMatcher{
-				Ipset:  "test-ipset-v4",
-				logger: zap.NewNop(),
-			},
-			remoteAddr:  "not-an-ip",
+			name:        "invalid IP format",
+			ipsetName:   "test-ipset-v4",
+			clientIP:    "not-an-ip",
+			expectError: true,
 			expectFalse: true,
 		},
 		{
-			name: "empty remote addr",
-			matcher: &IpsetMatcher{
-				Ipset:  "test-ipset-v4",
-				logger: zap.NewNop(),
-			},
-			remoteAddr:  "",
+			name:        "empty client IP",
+			ipsetName:   "test-ipset-v4",
+			clientIP:    "",
+			expectError: true,
 			expectFalse: true,
 		},
 		{
-			name: "malformed IP with port",
-			matcher: &IpsetMatcher{
-				Ipset:  "test-ipset-v4",
-				logger: zap.NewNop(),
-			},
-			remoteAddr:  "999.999.999.999:8080",
+			name:        "malformed IP",
+			ipsetName:   "test-ipset-v4",
+			clientIP:    "999.999.999.999",
+			expectError: true,
 			expectFalse: true,
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
+			m := &IpsetMatcher{
+				Ipset: tc.ipsetName,
+			}
 
-			result := tc.matcher.Match(req)
+			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+			defer cancel()
+
+			err := m.Provision(ctx)
+			if err != nil {
+				t.Skipf("Skipping test - provisioning failed: %v", err)
+				return
+			}
+			defer func(m *IpsetMatcher) {
+				_ = m.Cleanup()
+			}(m)
+
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set the client IP
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
+			if tc.expectError && err == nil {
+				t.Errorf("Expected error for %s", tc.name)
+			}
 			if tc.expectFalse && result {
-				t.Errorf("Expected Match to return false for %s", tc.name)
+				t.Errorf("Expected MatchWithError to return false for %s", tc.name)
 			}
 		})
 	}
@@ -545,8 +685,8 @@ func TestProvision_IPv6Ipsets(t *testing.T) {
 	}
 }
 
-// TestMatch_IPv6FullIntegration tests IPv6 matching with real IPv6 ipsets
-func TestMatch_IPv6FullIntegration(t *testing.T) {
+// TestMatchWithError_IPv6FullIntegration tests IPv6 matching with real IPv6 ipsets
+func TestMatchWithError_IPv6FullIntegration(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset: "test-ipset-v6",
 	}
@@ -558,30 +698,43 @@ func TestMatch_IPv6FullIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to provision matcher: %v", err)
 	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
 
 	testCases := []struct {
 		name        string
-		remoteAddr  string
+		clientIP    string
 		shouldMatch bool
 	}{
-		{"localhost IPv6 should match", "[::1]:8080", true},
-		{"test IPv6 should match", "[2001:db8::1]:8080", true},
-		{"link-local IPv6 should match", "[fe80::1]:8080", true},
-		{"random IPv6 should not match", "[2001:db8::999]:8080", false},
-		{"different IPv6 should not match", "[fd00::1]:8080", false},
+		{"localhost IPv6 should match", "::1", true},
+		{"test IPv6 should match", "2001:db8::1", true},
+		{"link-local IPv6 should match", "fe80::1", true},
+		{"random IPv6 should not match", "2001:db8::999", false},
+		{"different IPv6 should not match", "fd00::1", false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
 
-			result := m.Match(req)
-			if result != tc.shouldMatch {
-				t.Errorf("%s: Match=%v, expected=%v", tc.name, result, tc.shouldMatch)
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set the client IP
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
-			t.Logf("%s is %sin test-ipset-v6: Match=%v (expected=%v)",
-				tc.remoteAddr,
+			if result != tc.shouldMatch {
+				t.Errorf("%s: MatchWithError=%v, expected=%v", tc.name, result, tc.shouldMatch)
+			}
+			t.Logf("%s is %sin test-ipset-v6: MatchWithError=%v (expected=%v)",
+				tc.clientIP,
 				map[bool]string{true: "", false: "not "}[tc.shouldMatch],
 				result,
 				tc.shouldMatch)
@@ -589,8 +742,8 @@ func TestMatch_IPv6FullIntegration(t *testing.T) {
 	}
 }
 
-// TestMatch_IPv6WithRemoteAddr tests IPv6 matching with various remote address formats
-func TestMatch_IPv6WithRemoteAddr(t *testing.T) {
+// TestMatchWithError_IPv6WithClientIP tests IPv6 matching with ClientIPVarKey
+func TestMatchWithError_IPv6WithClientIP(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset: "test-ipset-v6",
 	}
@@ -602,29 +755,42 @@ func TestMatch_IPv6WithRemoteAddr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to provision matcher: %v", err)
 	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "[2001:db8::1]:12345" // IPv6 remote addr
 
-	result := m.Match(req)
-	if !result {
-		t.Error("Expected IPv6 from RemoteAddr to match")
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set IPv6 client IP
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "2001:db8::1")
+
+	result, err := m.MatchWithError(req)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
 	}
-	t.Logf("IPv6 from RemoteAddr matched: %v", result)
+	if !result {
+		t.Error("Expected IPv6 from ClientIPVarKey to match")
+	}
+	t.Logf("IPv6 from ClientIPVarKey matched: %v", result)
 }
 
-// TestMatch_MixedIPv4AndIPv6 tests that IPv4 addresses don't match IPv6 ipsets
-func TestMatch_MixedIPv4AndIPv6(t *testing.T) {
+// TestMatchWithError_MixedIPv4AndIPv6 tests that IPv4 addresses don't match IPv6 ipsets
+func TestMatchWithError_MixedIPv4AndIPv6(t *testing.T) {
 	testCases := []struct {
 		name        string
 		ipsetName   string
-		remoteAddr  string
+		clientIP    string
 		shouldMatch bool
 	}{
-		{"IPv4 against IPv4 ipset", "test-ipset-v4", "127.0.0.1:8080", true},
-		{"IPv6 against IPv6 ipset", "test-ipset-v6", "[::1]:8080", true},
-		{"IPv4 against IPv6 ipset", "test-ipset-v6", "127.0.0.1:8080", false},
-		{"IPv6 against IPv4 ipset", "test-ipset-v4", "[::1]:8080", false},
+		{"IPv4 against IPv4 ipset", "test-ipset-v4", "127.0.0.1", true},
+		{"IPv6 against IPv6 ipset", "test-ipset-v6", "::1", true},
+		{"IPv4 against IPv6 ipset", "test-ipset-v6", "127.0.0.1", false},
+		{"IPv6 against IPv4 ipset", "test-ipset-v4", "::1", false},
 	}
 
 	for _, tc := range testCases {
@@ -640,22 +806,35 @@ func TestMatch_MixedIPv4AndIPv6(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to provision matcher: %v", err)
 			}
+			defer func(m *IpsetMatcher) {
+				_ = m.Cleanup()
+			}(m)
 
 			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
 
-			result := m.Match(req)
-			if result != tc.shouldMatch {
-				t.Errorf("%s: Match=%v, expected=%v", tc.name, result, tc.shouldMatch)
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set the client IP
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
 			}
-			t.Logf("%s: %s against %s: Match=%v (expected=%v)",
-				tc.name, tc.remoteAddr, tc.ipsetName, result, tc.shouldMatch)
+			if result != tc.shouldMatch {
+				t.Errorf("%s: MatchWithError=%v, expected=%v", tc.name, result, tc.shouldMatch)
+			}
+			t.Logf("%s: %s against %s: MatchWithError=%v (expected=%v)",
+				tc.name, tc.clientIP, tc.ipsetName, result, tc.shouldMatch)
 		})
 	}
 }
 
-// TestMatch_IPv6EdgeCases tests edge cases for IPv6 addresses
-func TestMatch_IPv6EdgeCases(t *testing.T) {
+// TestMatchWithError_IPv6EdgeCases tests edge cases for IPv6 addresses
+func TestMatchWithError_IPv6EdgeCases(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset: "test-ipset-v6",
 	}
@@ -667,47 +846,62 @@ func TestMatch_IPv6EdgeCases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to provision matcher: %v", err)
 	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
 
 	testCases := []struct {
 		name        string
-		remoteAddr  string
+		clientIP    string
 		shouldMatch bool
 		shouldError bool
 	}{
-		{"IPv6 with zone ID", "[fe80::1%eth0]:8080", false, true}, // Zone IDs not supported in ipset
-		{"IPv6 compressed", "[::1]:8080", true, false},
-		{"IPv6 full form", "[0000:0000:0000:0000:0000:0000:0000:0001]:8080", true, false},
-		{"IPv6 without brackets and port", "::1", true, false}, // Invalid format for RemoteAddr
-		{"IPv4-mapped IPv6", "[::ffff:127.0.0.1]:8080", false, false},
+		{"IPv6 with zone ID", "fe80::1%eth0", false, true}, // Zone IDs not supported in ipset
+		{"IPv6 compressed", "::1", true, false},
+		{"IPv6 full form", "0000:0000:0000:0000:0000:0000:0000:0001", true, false},
+		{"IPv4-mapped IPv6", "::ffff:127.0.0.1", false, false},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
 
-			result := m.Match(req)
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set the client IP
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
 
 			if tc.shouldError {
-				// For error cases, we expect Match to return false
+				// For error cases, we expect an error
+				if err == nil {
+					t.Errorf("%s: Expected error but got none", tc.name)
+				}
 				if result {
-					t.Errorf("%s: Expected Match to return false for error case, got true", tc.name)
+					t.Errorf("%s: Expected MatchWithError to return false for error case, got true", tc.name)
 				}
 			} else {
+				if err != nil {
+					t.Errorf("%s: Unexpected error: %v", tc.name, err)
+				}
 				if result != tc.shouldMatch {
-					t.Errorf("%s: Match=%v, expected=%v", tc.name, result, tc.shouldMatch)
+					t.Errorf("%s: MatchWithError=%v, expected=%v", tc.name, result, tc.shouldMatch)
 				}
 			}
-			t.Logf("%s: %s: Match=%v (expected=%v, shouldError=%v)",
-				tc.name, tc.remoteAddr, result, tc.shouldMatch, tc.shouldError)
+			t.Logf("%s: %s: MatchWithError=%v (expected=%v, shouldError=%v)",
+				tc.name, tc.clientIP, result, tc.shouldMatch, tc.shouldError)
 		})
 	}
 }
 
-// TestMatch_WithClientIPVarKey tests that the matcher correctly uses the ClientIPVarKey
+// TestMatchWithError_WithClientIPVarKey tests that the matcher correctly uses the ClientIPVarKey
 // from the request context when it's set (e.g., by Caddy's trusted_proxies logic)
-// This test specifically hits the code path at lines 107-110 in ipset.go
-func TestMatch_WithClientIPVarKey(t *testing.T) {
+// This test specifically hits the code path at lines 154-159 in ipset.go
+func TestMatchWithError_WithClientIPVarKey(t *testing.T) {
 	// First provision the matcher so it has a valid handle
 	m := &IpsetMatcher{
 		Ipset: "test-ipset-v4",
@@ -728,31 +922,26 @@ func TestMatch_WithClientIPVarKey(t *testing.T) {
 	}()
 
 	testCases := []struct {
-		name       string
-		clientIP   string
-		remoteAddr string
+		name     string
+		clientIP string
 	}{
 		{
-			name:       "IPv4 without port from ClientIPVarKey",
-			clientIP:   "192.168.1.100",
-			remoteAddr: "10.0.0.1:12345", // Should be ignored in favor of ClientIPVarKey
+			name:     "IPv4 without port from ClientIPVarKey",
+			clientIP: "192.168.1.100",
 		},
 		{
-			name:       "localhost from ClientIPVarKey",
-			clientIP:   "127.0.0.1",
-			remoteAddr: "10.0.0.1:12345",
+			name:     "localhost from ClientIPVarKey",
+			clientIP: "127.0.0.1",
 		},
 		{
-			name:       "IPv6 from ClientIPVarKey",
-			clientIP:   "2001:db8::1",
-			remoteAddr: "10.0.0.1:12345",
+			name:     "IPv6 from ClientIPVarKey",
+			clientIP: "2001:db8::1",
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
 
 			// Use PrepareRequest to properly initialize the request context
 			// This is what Caddy does internally before passing requests to handlers
@@ -764,14 +953,24 @@ func TestMatch_WithClientIPVarKey(t *testing.T) {
 			// This simulates what Caddy does when trusted_proxies is configured
 			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
 
-			// Call Match - this should use tc.clientIP from ClientIPVarKey, not tc.remoteAddr
-			// This hits the code path at lines 107-110 in ipset.go where clientIPvar != nil
-			result := m.Match(req)
+			// Call MatchWithError - this should use tc.clientIP from ClientIPVarKey
+			// This hits the code path at lines 154-159 in ipset.go where clientIPvar is retrieved
+			result, err := m.MatchWithError(req)
 
 			// We can't assert the exact result without knowing ipset contents,
 			// but we can verify it doesn't panic and processes the ClientIPVarKey
-			t.Logf("Match result for ClientIPVarKey=%s (RemoteAddr=%s): %v",
-				tc.clientIP, tc.remoteAddr, result)
+			if err != nil {
+				// IPv6 against IPv4 ipset should not error, just return false
+				if tc.clientIP == "2001:db8::1" {
+					if result {
+						t.Errorf("Expected false for IPv6 against IPv4 ipset")
+					}
+				} else {
+					t.Errorf("Unexpected error: %v", err)
+				}
+			}
+			t.Logf("MatchWithError result for ClientIPVarKey=%s: %v (err=%v)",
+				tc.clientIP, result, err)
 		})
 	}
 }
@@ -813,13 +1012,13 @@ func TestProvision_SavesIPFamily(t *testing.T) {
 	}
 }
 
-// TestMatch_IPFamilyOptimization tests that mismatched IP families are skipped
-func TestMatch_IPFamilyOptimization(t *testing.T) {
+// TestMatchWithError_IPFamilyOptimization tests that mismatched IP families are skipped
+func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 	testCases := []struct {
 		name        string
 		ipsetName   string
 		ipsetFamily uint8
-		remoteAddr  string
+		clientIP    string
 		shouldMatch bool
 		shouldSkip  bool
 		description string
@@ -828,7 +1027,7 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			name:        "IPv4 against IPv4 ipset - should check",
 			ipsetName:   "test-ipset-v4",
 			ipsetFamily: unix.NFPROTO_IPV4,
-			remoteAddr:  "127.0.0.1:8080",
+			clientIP:    "127.0.0.1",
 			shouldMatch: true,
 			shouldSkip:  false,
 			description: "IPv4 address should be checked against IPv4 ipset",
@@ -837,7 +1036,7 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			name:        "IPv6 against IPv6 ipset - should check",
 			ipsetName:   "test-ipset-v6",
 			ipsetFamily: unix.NFPROTO_IPV6,
-			remoteAddr:  "[::1]:8080",
+			clientIP:    "::1",
 			shouldMatch: true,
 			shouldSkip:  false,
 			description: "IPv6 address should be checked against IPv6 ipset",
@@ -846,7 +1045,7 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			name:        "IPv6 against IPv4 ipset - should skip",
 			ipsetName:   "test-ipset-v4",
 			ipsetFamily: unix.NFPROTO_IPV4,
-			remoteAddr:  "[::1]:8080",
+			clientIP:    "::1",
 			shouldMatch: false,
 			shouldSkip:  true,
 			description: "IPv6 address should be skipped for IPv4 ipset",
@@ -855,7 +1054,7 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			name:        "IPv4 against IPv6 ipset - should skip",
 			ipsetName:   "test-ipset-v6",
 			ipsetFamily: unix.NFPROTO_IPV6,
-			remoteAddr:  "127.0.0.1:8080",
+			clientIP:    "127.0.0.1",
 			shouldMatch: false,
 			shouldSkip:  true,
 			description: "IPv4 address should be skipped for IPv6 ipset",
@@ -864,7 +1063,7 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			name:        "IPv4 non-matching against IPv4 ipset - should check but not match",
 			ipsetName:   "test-ipset-v4",
 			ipsetFamily: unix.NFPROTO_IPV4,
-			remoteAddr:  "203.0.113.1:8080",
+			clientIP:    "203.0.113.1",
 			shouldMatch: false,
 			shouldSkip:  false,
 			description: "IPv4 address not in ipset should be checked but return false",
@@ -873,7 +1072,7 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			name:        "IPv6 non-matching against IPv6 ipset - should check but not match",
 			ipsetName:   "test-ipset-v6",
 			ipsetFamily: unix.NFPROTO_IPV6,
-			remoteAddr:  "[2001:db8::999]:8080",
+			clientIP:    "2001:db8::999",
 			shouldMatch: false,
 			shouldSkip:  false,
 			description: "IPv6 address not in ipset should be checked but return false",
@@ -893,6 +1092,9 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Failed to provision matcher: %v", err)
 			}
+			defer func(m *IpsetMatcher) {
+				_ = m.Cleanup()
+			}(m)
 
 			// Verify the ipset family was saved correctly
 			if m.ipsetFamily != tc.ipsetFamily {
@@ -900,18 +1102,28 @@ func TestMatch_IPFamilyOptimization(t *testing.T) {
 			}
 
 			req := httptest.NewRequest("GET", "http://example.com", nil)
-			req.RemoteAddr = tc.remoteAddr
 
-			result := m.Match(req)
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set the client IP
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
+			if err != nil {
+				t.Errorf("Unexpected error: %v", err)
+			}
 
 			if result != tc.shouldMatch {
-				t.Errorf("%s: Match=%v, expected=%v", tc.description, result, tc.shouldMatch)
+				t.Errorf("%s: MatchWithError=%v, expected=%v", tc.description, result, tc.shouldMatch)
 			}
 
 			if tc.shouldSkip {
-				t.Logf("✓ %s: Correctly skipped (Match=%v)", tc.description, result)
+				t.Logf("✓ %s: Correctly skipped (MatchWithError=%v)", tc.description, result)
 			} else {
-				t.Logf("✓ %s: Correctly checked (Match=%v)", tc.description, result)
+				t.Logf("✓ %s: Correctly checked (MatchWithError=%v)", tc.description, result)
 			}
 		})
 	}
@@ -982,8 +1194,8 @@ func TestIsPermissionError_WrappedError(t *testing.T) {
 	}
 }
 
-// TestMatch_ClientIPVarKeyNonString tests the case where ClientIPVarKey is not a string
-func TestMatch_ClientIPVarKeyNonString(t *testing.T) {
+// TestMatchWithError_ClientIPVarKeyNonString tests the case where ClientIPVarKey is not a string
+func TestMatchWithError_ClientIPVarKeyNonString(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset: "test-ipset-v4",
 	}
@@ -1003,7 +1215,6 @@ func TestMatch_ClientIPVarKeyNonString(t *testing.T) {
 	}()
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "127.0.0.1:8080"
 
 	// Prepare the request with Caddy context
 	repl := caddyhttp.NewTestReplacer(req)
@@ -1013,9 +1224,43 @@ func TestMatch_ClientIPVarKeyNonString(t *testing.T) {
 	// Set ClientIPVarKey to a non-string value (e.g., an integer)
 	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, 12345)
 
-	// This should return false because the type assertion fails
-	result := m.Match(req)
+	// This should return an error because the type assertion fails
+	result, err := m.MatchWithError(req)
+	if err == nil {
+		t.Error("Expected error when ClientIPVarKey is not a string")
+	}
 	if result {
-		t.Error("Expected Match to return false when ClientIPVarKey is not a string")
+		t.Error("Expected MatchWithError to return false when ClientIPVarKey is not a string")
+	}
+}
+
+// TestMatchWithError_UninitializedHandle tests the case where the handle is not initialized
+func TestMatchWithError_UninitializedHandle(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipset:  "test-ipset-v4",
+		logger: zap.NewNop(),
+		handle: nil, // Explicitly set to nil to simulate uninitialized state
+	}
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+
+	// Prepare the request with Caddy context
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Set a valid client IP
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "127.0.0.1")
+
+	// This should return an error because the handle is not initialized
+	result, err := m.MatchWithError(req)
+	if err == nil {
+		t.Error("Expected error when handle is not initialized")
+	}
+	if err != nil && !strings.Contains(err.Error(), "not initialized") && !strings.Contains(err.Error(), "not properly provisioned") {
+		t.Errorf("Expected error message about uninitialized handle, got: %v", err)
+	}
+	if result {
+		t.Error("Expected MatchWithError to return false when handle is not initialized")
 	}
 }

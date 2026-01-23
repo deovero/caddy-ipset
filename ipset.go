@@ -3,8 +3,6 @@
 
 // Package caddy_ipset provides a Caddy HTTP matcher module that matches requests
 // based on client IP addresses against Linux ipset lists.
-// It uses Caddy's built-in client IP detection which respects the trusted_proxies
-// configuration.
 package caddy_ipset
 
 import (
@@ -40,7 +38,9 @@ type IpsetMatcher struct {
 	// This is set during Provision and used to skip mismatched IP families during Match
 	ipsetFamily uint8
 	// mu protects concurrent access to the netlink handle
-	// The netlink socket is not thread-safe and must be protected
+	// The netlink socket is not thread-safe and must be protected.
+	// We use a mutex instead of a sync.Pool because netlink handles hold file descriptors
+	// that must be explicitly closed to avoid leaks during Caddy configuration reloads.
 	mu sync.Mutex
 }
 
@@ -101,9 +101,11 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		// Not a permission error, ipset doesn't exist or other error
 		return fmt.Errorf("ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
 	}
+
 	// Save the ipset family for later use in Match
 	m.ipsetFamily = result.Family
-	m.logger.Info(fmt.Sprintf("checked netlink ipset '%s', success", m.Ipset),
+	m.logger.Info("validated ipset existence",
+		zap.String("ipset", m.Ipset),
 		zap.String("type", result.TypeName),
 		zap.String("family", familyToString(result.Family)),
 	)
@@ -115,7 +117,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 // It ensures proper cleanup of system resources.
 func (m *IpsetMatcher) Cleanup() error {
 	if m.handle != nil {
-		// Lock the mutex to ensure thread-safe access to the netlink socket
+		// Lock the mutex to ensure we don't close while a Match is in progress
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		m.handle.Close()
@@ -125,8 +127,7 @@ func (m *IpsetMatcher) Cleanup() error {
 	return nil
 }
 
-// Match implements the caddyhttp.RequestMatcher interface.
-// It returns true if the client's IP address is found in the configured ipset.
+// MatchWithError implements the caddyhttp.RequestMatcherWithError interface.
 // The client IP is determined using Caddy's built-in detection which respects
 // the trusted_proxies configuration.
 //
@@ -136,76 +137,50 @@ func (m *IpsetMatcher) Cleanup() error {
 //   - Checks if the IP family matches the ipset family (optimization)
 //   - Performs the ipset lookup via netlink
 //
-// Returns false if:
+// Returns false + error if:
 //   - The netlink handle is not initialized
 //   - The client IP cannot be determined or parsed
-//   - The IP family doesn't match the ipset family
 //   - An error occurs during ipset lookup
+//
+// Returns false if:
+//   - The IP family doesn't match the ipset family
 //   - The IP is not found in the ipset
-func (m *IpsetMatcher) Match(req *http.Request) bool {
+//
+// Returns true if:
+//   - the client's IP address is found in the configured ipset.
+func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Check if handle is initialized (should be set during Provision)
 	if m.handle == nil {
-		if m.logger != nil {
-			m.logger.Error("Netlink handle not initialized - matcher not properly provisioned")
-		}
-		return false
+		return false, fmt.Errorf("netlink handle not initialized - matcher not properly provisioned")
 	}
 
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
-	var clientIP string
 	clientIPvar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
-	if clientIPvar != nil {
-		// Use the client IP determined by Caddy's trusted proxy logic
-		// Safely assert the type to string
-		var ok bool
-		clientIP, ok = clientIPvar.(string)
-		if !ok {
-			m.logger.Error("ClientIPVarKey is not a string",
-				zap.Any("value", clientIPvar),
-				zap.String("type", fmt.Sprintf("%T", clientIPvar)))
-			return false
-		}
-		m.logger.Debug("received client ip from Caddy", zap.String(caddyhttp.ClientIPVarKey, clientIP))
-	} else {
-		// Fallback to RemoteAddr if ClientIPVarKey is not set
-		// This shouldn't normally happen in a Caddy HTTP handler context
-		m.logger.Debug("fallback to RemoteAddr", zap.String("RemoteAddr", req.RemoteAddr))
-		// Extract IP address, stripping port if present
-		var err error
-		clientIP, _, err = net.SplitHostPort(req.RemoteAddr)
-		if err != nil {
-			// If SplitHostPort fails, the address might not have a port
-			// Try using it directly as an IP address
-			clientIP = req.RemoteAddr
-			m.logger.Debug("remoteAddr has no port, using as-is",
-				zap.String("remoteAddr", req.RemoteAddr))
-		}
+	clientIP, ok := clientIPvar.(string)
+	if !ok {
+		return false, fmt.Errorf("%s is not a string but a %T", caddyhttp.ClientIPVarKey, clientIPvar)
 	}
 
 	// Parse the IP address
 	ip := net.ParseIP(clientIP)
 	if ip == nil {
-		m.logger.Error("invalid IP address",
-			zap.String("ip", clientIP))
-		return false
+		return false, fmt.Errorf("invalid IP address: %s", clientIP)
 	}
 
 	// Check if the IP family matches the ipset family
-	// This optimization avoids unnecessary ipset lookups when the IP family doesn't match
-	// For example, skip checking IPv6 addresses against IPv4 ipsets
 	// Generating a warning because your Caddy configuration should prevent this.
 	isIPv4 := ip.To4() != nil
 	if m.ipsetFamily == nl.FAMILY_V4 && !isIPv4 {
-		m.logger.Warn("skipped matching of IPv6 address against IPv4 ipset",
+		m.logger.Warn("skipped matching of IPv6 address against IPv4 ipset. Your config should prevent this.",
 			zap.String("ip", clientIP),
 			zap.String("ipset", m.Ipset))
-		return false
+		return false, nil
 	}
 	if m.ipsetFamily == nl.FAMILY_V6 && isIPv4 {
-		m.logger.Warn("skipped matching of IPv4 address against IPv6 ipset",
+		m.logger.Warn("skipped matching of IPv4 address against IPv6 ipset. Your config should prevent this.",
 			zap.String("ip", clientIP),
 			zap.String("ipset", m.Ipset))
-		return false
+		return false, nil
 	}
 
 	// Match using netlink handle
@@ -219,24 +194,19 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 	)
 
 	if err != nil {
-		m.logger.Error("error testing IP against ipset",
-			zap.String("ip", clientIP),
-			zap.String("ipset", m.Ipset),
-			zap.Error(err))
-		return false
+		return false, fmt.Errorf("error testing IP '%s' against ipset '%s': %w", clientIP, m.Ipset, err)
 	}
 
-	if !found {
-		m.logger.Debug("IP not in ipset",
-			zap.String("ip", clientIP),
-			zap.String("ipset", m.Ipset))
-		return false
+	message := "IP not in ipset"
+	if found {
+		message = "IP matched in ipset"
 	}
-
-	m.logger.Debug("IP matched in ipset",
+	m.logger.Debug(message,
 		zap.String("ip", clientIP),
-		zap.String("ipset", m.Ipset))
-	return true
+		zap.String("ipset", m.Ipset),
+	)
+
+	return found, nil
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -252,6 +222,10 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		if !d.Args(&m.Ipset) {
+			return d.ArgErr()
+		}
+		// Ensure no extra arguments are provided
+		if d.NextArg() {
 			return d.ArgErr()
 		}
 	}
@@ -299,7 +273,8 @@ func familyToString(family uint8) string {
 
 // Interface guards
 var (
-	_ caddy.Provisioner     = (*IpsetMatcher)(nil)
-	_ caddy.CleanerUpper    = (*IpsetMatcher)(nil)
-	_ caddyfile.Unmarshaler = (*IpsetMatcher)(nil)
+	_ caddy.Provisioner                 = (*IpsetMatcher)(nil)
+	_ caddy.CleanerUpper                = (*IpsetMatcher)(nil)
+	_ caddyfile.Unmarshaler             = (*IpsetMatcher)(nil)
+	_ caddyhttp.RequestMatcherWithError = (*IpsetMatcher)(nil)
 )

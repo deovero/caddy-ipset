@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed test ipsets to use `test-ipset-v4` and `test-ipset-v6` naming convention
 - No longer validating name of ipset since almost all characters are allowed
 - Improved logging
+- Switched from RequestMatcher to RequestMatcherWithError
 
 ### Removed
 - Sudo ipset fallback functionality
