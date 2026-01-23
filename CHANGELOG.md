@@ -11,13 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Full IPv6 support for ipset matching
-- IPv6 test coverage with comprehensive test cases
 - Pre-commit hook for automatic code formatting and vetting before commit
-- Docker-based testing environment for macOS (including Apple Silicon support)
-- Multi-architecture Docker support (AMD64 and ARM64)
-- CGO support for race detection in tests
-- Makefile with convenient commands for Docker-based testing
-- `.dockerignore` for optimized Docker builds
 - Consolidated `scripts/` directory for all project scripts
 
 ### Documentation
@@ -35,13 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed testing as non-root user
 - Added comprehensive IPv6 test cases
 - Shared ipset setup script for consistency between Docker and CI
-
-### Changed
-- Reorganized project structure: moved all scripts to `scripts/` directory
-  - `Dockerfile` → `scripts/Dockerfile`
-  - `test-docker.sh` → `scripts/test-docker.sh`
-  - `hooks/pre-commit` → `scripts/pre-commit`
-- Extracted ipset setup logic to shared script (`scripts/setup-test-ipsets.sh`)
+- IPv6 test coverage with comprehensive test cases
+- Docker-based testing environment for macOS (including Apple Silicon support)
+- Multi-architecture Docker support (AMD64 and ARM64)
+- CGO support for race detection in tests
+- Makefile with convenient commands for Docker-based testing
+- `.dockerignore` for optimized Docker builds
 
 ## [0.1.0] - 2026-01-22
 
