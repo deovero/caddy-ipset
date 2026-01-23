@@ -31,10 +31,8 @@ jobs:
     - name: Set up test ipsets
       run: sudo bash scripts/setup-test-ipsets.sh
 
-    - name: Configure passwordless sudo for ipset
-      run: |
-        echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/ipset" | sudo tee /etc/sudoers.d/ipset-ci
-        sudo chmod 0440 /etc/sudoers.d/ipset-ci
+    - name: Install libcap2-bin for setcap
+      run: sudo apt-get install -y libcap2-bin
 
     - name: Cache Go modules
       uses: actions/cache@v4
@@ -53,8 +51,14 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
-    - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+    - name: Build test binary
+      run: go test -c -race -cover -o /tmp/caddy-ipset.test
+
+    - name: Grant CAP_NET_ADMIN capability to test binary
+      run: sudo setcap cap_net_admin+ep /tmp/caddy-ipset.test
+
+    - name: Run tests with capability
+      run: /tmp/caddy-ipset.test -test.v -test.coverprofile=coverage.out
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
