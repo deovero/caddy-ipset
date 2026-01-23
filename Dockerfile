@@ -31,9 +31,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm go.tar.gz
 
 # Set up Go environment
-ENV PATH="/usr/local/go/bin:${PATH}"
-ENV GOPATH="/go"
-ENV PATH="${GOPATH}/bin:${PATH}"
+ENV GOPATH=/go
+ENV PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV CGO_ENABLED=1
 
 # Create a non-root user for testing
@@ -50,49 +49,16 @@ RUN go mod download
 # Copy the rest of the source code
 COPY . .
 
-# Load ipset kernel module and create test ipsets
-# Note: This requires --privileged flag when running the container
-RUN echo '#!/bin/bash\n\
-set -e\n\
-\n\
-# Load ipset module if not already loaded\n\
-modprobe ip_tables 2>/dev/null || true\n\
-modprobe ip_set 2>/dev/null || true\n\
-modprobe ip_set_hash_ip 2>/dev/null || true\n\
-modprobe ip_set_hash_net 2>/dev/null || true\n\
-\n\
-# Create IPv4 test ipsets\n\
-ipset create test-ipset hash:ip 2>/dev/null || ipset flush test-ipset\n\
-ipset create blocklist hash:ip 2>/dev/null || ipset flush blocklist\n\
-ipset create empty hash:ip 2>/dev/null || ipset flush empty\n\
-\n\
-# Create IPv6 test ipsets\n\
-ipset create test-ipset-v6 hash:ip family inet6 2>/dev/null || ipset flush test-ipset-v6\n\
-ipset create blocklist-v6 hash:ip family inet6 2>/dev/null || ipset flush blocklist-v6\n\
-ipset create empty-v6 hash:ip family inet6 2>/dev/null || ipset flush empty-v6\n\
-\n\
-# Add some test IPv4 addresses\n\
-ipset add test-ipset 127.0.0.1 2>/dev/null || true\n\
-ipset add test-ipset 192.168.1.100 2>/dev/null || true\n\
-ipset add blocklist 10.0.0.1 2>/dev/null || true\n\
-\n\
-# Add some test IPv6 addresses\n\
-ipset add test-ipset-v6 ::1 2>/dev/null || true\n\
-ipset add test-ipset-v6 2001:db8::1 2>/dev/null || true\n\
-ipset add test-ipset-v6 fe80::1 2>/dev/null || true\n\
-ipset add blocklist-v6 2001:db8::bad 2>/dev/null || true\n\
-\n\
-echo "Test ipsets created successfully"\n\
-ipset list -n\n\
-' > /usr/local/bin/setup-ipsets.sh \
-    && chmod +x /usr/local/bin/setup-ipsets.sh
+# Install the shared setup script
+RUN cp scripts/setup-test-ipsets.sh /usr/local/bin/setup-test-ipsets.sh \
+    && chmod +x /usr/local/bin/setup-test-ipsets.sh
 
 # Create entrypoint script
 RUN echo '#!/bin/bash\n\
 set -e\n\
 \n\
 # Setup ipsets\n\
-/usr/local/bin/setup-ipsets.sh\n\
+/usr/local/bin/setup-test-ipsets.sh\n\
 \n\
 # Execute the command passed to docker run\n\
 exec "$@"\n\
@@ -101,4 +67,3 @@ exec "$@"\n\
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/bin/bash"]
-
