@@ -26,8 +26,7 @@ func init() {
 	caddy.RegisterModule((*IpsetMatcher)(nil))
 }
 
-// IpsetMatcher is a Caddy HTTP matcher that matches requests based on client IP
-// addresses against Linux ipset lists.
+// IpsetMatcher is a Linux-specific Caddy HTTP matcher that matches client IP against ipset lists.
 type IpsetMatcher struct {
 	// Ipset is the name of the ipset list to match against
 	Ipset string `json:"ipset,omitempty"`
