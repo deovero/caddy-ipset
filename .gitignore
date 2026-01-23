@@ -15,7 +15,7 @@
 *.out
 
 # Coverage reports
-coverage.txt
+coverage.out
 coverage.html
 
 # Dependency directories (remove the comment below to include it)

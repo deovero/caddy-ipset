@@ -92,22 +92,18 @@ ipset list
 
 # Add test IPs to ipset
 ipset add test-ipset 192.168.1.50
-
-# Test as non-root user (sudo fallback)
-su - testuser
-cd /workspace
-go test -v ./...
 ```
 
 ## How It Works
 
 ### Docker Setup
 
-1. **scripts/Dockerfile**: Creates an Ubuntu 22.04 container with:
+1. **scripts/Dockerfile**: Creates an Ubuntu 24.04 container with:
    - Go 1.25
    - ipset and iptables
+   - libcap2-bin for setcap support
    - Test ipsets pre-configured
-   - Both root and non-root test users
+   - Non-root testuser for realistic testing
 
 2. **docker-compose.yml**: Manages the container with:
    - Privileged mode (required for ipset kernel module)
@@ -116,8 +112,8 @@ go test -v ./...
 
 3. **test-docker.sh**: Automated test script that:
    - Verifies ipset setup
-   - Runs tests as root (netlink access)
-   - Runs tests as non-root (sudo fallback)
+   - Builds test binary and grants CAP_NET_ADMIN capability with setcap
+   - Runs tests as non-root user (testuser) with CAP_NET_ADMIN
    - Generates coverage reports
 
 ### Test Ipsets

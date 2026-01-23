@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
-	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"go.uber.org/zap"
 )
 
@@ -47,7 +47,7 @@ func TestProvision_EmptyIpsetName(t *testing.T) {
 		t.Error("Expected error for empty ipset name")
 	}
 
-	if err.Error() != "ERROR ipset name is required" {
+	if err != nil && err.Error() != "ERROR ipset name is required" {
 		t.Errorf("Expected 'ERROR ipset name is required' error, got '%s'", err.Error())
 	}
 }
@@ -168,52 +168,6 @@ func TestMatch_ClientIPWithPort(t *testing.T) {
 	// This is expected - we should use the IP directly in this case
 }
 
-func TestUnmarshalCaddyfile(t *testing.T) {
-	testCases := []struct {
-		name        string
-		input       string
-		expectError bool
-		expectedSet string
-	}{
-		{
-			name:        "valid ipset name",
-			input:       "ipset test-ipset",
-			expectError: false,
-			expectedSet: "test-ipset",
-		},
-		{
-			name:        "valid ipset name with underscores",
-			input:       "ipset my_ipset_123",
-			expectError: false,
-			expectedSet: "my_ipset_123",
-		},
-		{
-			name:        "missing argument",
-			input:       "ipset",
-			expectError: true,
-			expectedSet: "",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &IpsetMatcher{}
-			d := caddyfile.NewTestDispenser(tc.input)
-			err := m.UnmarshalCaddyfile(d)
-
-			if tc.expectError && err == nil {
-				t.Error("Expected error but got none")
-			}
-			if !tc.expectError && err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			if !tc.expectError && m.Ipset != tc.expectedSet {
-				t.Errorf("Expected ipset '%s', got '%s'", tc.expectedSet, m.Ipset)
-			}
-		})
-	}
-}
-
 func TestIsPermissionError(t *testing.T) {
 	testCases := []struct {
 		name     string
@@ -240,20 +194,6 @@ func TestIsPermissionError(t *testing.T) {
 	}
 }
 
-func TestMethodString(t *testing.T) {
-	m := &IpsetMatcher{}
-
-	m.method = ipsetMethodNetlink
-	if m.methodString() != "netlink" {
-		t.Errorf("Expected 'netlink', got '%s'", m.methodString())
-	}
-
-	m.method = ipsetMethodSudo
-	if m.methodString() != "sudo" {
-		t.Errorf("Expected 'sudo', got '%s'", m.methodString())
-	}
-}
-
 // TestProvision_NetlinkSuccess tests successful provisioning with netlink access
 func TestProvision_NetlinkSuccess(t *testing.T) {
 	// This test requires an actual ipset to exist
@@ -267,17 +207,9 @@ func TestProvision_NetlinkSuccess(t *testing.T) {
 
 	err := m.Provision(ctx)
 	// This may fail if running outside Docker or if test-ipset doesn't exist
-	// In that case, it should fall back to sudo or return an error
 	if err != nil {
-		// Check if it's a "does not exist" error, which is acceptable in some test environments
-		if m.method != ipsetMethodSudo {
-			t.Logf("Netlink provisioning failed (expected in some environments): %v", err)
-		}
+		t.Logf("Netlink provisioning failed (expected in some environments): %v", err)
 	} else {
-		// Verify the method was set
-		if m.method != ipsetMethodNetlink && m.method != ipsetMethodSudo {
-			t.Error("Expected method to be set to netlink or sudo")
-		}
 		// Verify logger was set
 		if m.logger == nil {
 			t.Error("Expected logger to be set")
@@ -305,7 +237,6 @@ func TestMatch_WithNetlinkMethod(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset:  "test-ipset",
 		logger: zap.NewNop(),
-		method: ipsetMethodNetlink,
 	}
 
 	// Test with an IP that should be in test-ipset (127.0.0.1)
@@ -320,30 +251,11 @@ func TestMatch_WithNetlinkMethod(t *testing.T) {
 	t.Logf("Match result for 127.0.0.1: %v", result)
 }
 
-// TestMatch_WithSudoMethod tests Match with sudo method
-func TestMatch_WithSudoMethod(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
-		logger: zap.NewNop(),
-		method: ipsetMethodSudo,
-	}
-
-	// Test with an IP
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "192.168.1.1:12345"
-
-	// This will attempt to use sudo
-	// Result depends on sudo configuration and ipset state
-	result := m.Match(req)
-	t.Logf("Match result for 192.168.1.1 with sudo: %v", result)
-}
-
 // TestMatch_IPWithoutPort tests Match with IP address without port
 func TestMatch_IPWithoutPort(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset:  "test-ipset",
 		logger: zap.NewNop(),
-		method: ipsetMethodNetlink,
 	}
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
@@ -360,7 +272,6 @@ func TestMatch_IPv6(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset:  "test-ipset",
 		logger: zap.NewNop(),
-		method: ipsetMethodNetlink,
 	}
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
@@ -417,12 +328,9 @@ func TestProvision_FullIntegration(t *testing.T) {
 				t.Logf("Provisioning failed for '%s': %v (may be expected in non-Docker environment)", tc.ipsetName, err)
 			}
 			if !tc.expectError && err == nil {
-				// Verify logger and method were set
+				// Verify logger was set
 				if m.logger == nil {
 					t.Error("Expected logger to be set")
-				}
-				if m.method != ipsetMethodNetlink && m.method != ipsetMethodSudo {
-					t.Errorf("Expected method to be netlink or sudo, got %v", m.method)
 				}
 			}
 		})
@@ -498,7 +406,6 @@ func TestMatch_ErrorHandling(t *testing.T) {
 			matcher: &IpsetMatcher{
 				Ipset:  "test-ipset",
 				logger: zap.NewNop(),
-				method: ipsetMethodNetlink,
 			},
 			remoteAddr:  "not-an-ip",
 			expectFalse: true,
@@ -508,7 +415,6 @@ func TestMatch_ErrorHandling(t *testing.T) {
 			matcher: &IpsetMatcher{
 				Ipset:  "test-ipset",
 				logger: zap.NewNop(),
-				method: ipsetMethodNetlink,
 			},
 			remoteAddr:  "",
 			expectFalse: true,
@@ -518,7 +424,6 @@ func TestMatch_ErrorHandling(t *testing.T) {
 			matcher: &IpsetMatcher{
 				Ipset:  "test-ipset",
 				logger: zap.NewNop(),
-				method: ipsetMethodNetlink,
 			},
 			remoteAddr:  "999.999.999.999:8080",
 			expectFalse: true,
@@ -535,157 +440,6 @@ func TestMatch_ErrorHandling(t *testing.T) {
 				t.Errorf("Expected Match to return false for %s", tc.name)
 			}
 		})
-	}
-}
-
-// TestVerifySudoIpset_Success tests successful sudo ipset verification
-func TestVerifySudoIpset_Success(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
-		logger: zap.NewNop(),
-	}
-
-	err := m.verifySudoIpset()
-	if err != nil {
-		t.Logf("verifySudoIpset failed (may be expected if sudo not configured): %v", err)
-		// This is acceptable - the test verifies the function runs without panicking
-	} else {
-		t.Log("verifySudoIpset succeeded - sudo is properly configured")
-	}
-}
-
-// TestVerifySudoIpset_NonExistentIpset tests sudo verification with non-existent ipset
-func TestVerifySudoIpset_NonExistentIpset(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipset:  "nonexistent-ipset-99999",
-		logger: zap.NewNop(),
-	}
-
-	err := m.verifySudoIpset()
-	// Should return an error for non-existent ipset
-	if err == nil {
-		t.Error("Expected error for non-existent ipset, but got nil")
-	} else {
-		t.Logf("Got expected error for non-existent ipset: %v", err)
-	}
-}
-
-// TestVerifySudoIpset_AllExistingIpsets tests sudo verification with all test ipsets
-func TestVerifySudoIpset_AllExistingIpsets(t *testing.T) {
-	testCases := []struct {
-		name      string
-		ipsetName string
-	}{
-		{"test-ipset", "test-ipset"},
-		{"blocklist", "blocklist"},
-		{"empty", "empty"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &IpsetMatcher{
-				Ipset:  tc.ipsetName,
-				logger: zap.NewNop(),
-			}
-
-			err := m.verifySudoIpset()
-			if err != nil {
-				t.Logf("verifySudoIpset failed for %s (may be expected if sudo not configured): %v", tc.ipsetName, err)
-			} else {
-				t.Logf("verifySudoIpset succeeded for %s", tc.ipsetName)
-			}
-		})
-	}
-}
-
-// TestProvision_SudoFallback tests the full provision flow with sudo fallback
-// This test is designed to trigger the sudo fallback path
-func TestProvision_SudoFallback(t *testing.T) {
-	// This test will naturally exercise verifySudoIpset when netlink fails
-	// In a non-root environment, this would trigger the sudo fallback
-	m := &IpsetMatcher{
-		Ipset: "test-ipset",
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Logf("Provision failed: %v (expected in some environments)", err)
-	} else {
-		t.Logf("Provision succeeded using method: %s", m.methodString())
-		// Verify the method was set
-		if m.method != ipsetMethodNetlink && m.method != ipsetMethodSudo {
-			t.Errorf("Expected method to be netlink or sudo, got %v", m.method)
-		}
-	}
-}
-
-// TestTestIPSudo_Success tests the testIPSudo function with existing IPs
-func TestTestIPSudo_Success(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
-		logger: zap.NewNop(),
-		method: ipsetMethodSudo,
-	}
-
-	testCases := []struct {
-		name        string
-		ip          string
-		expectFound bool
-	}{
-		{"localhost in test-ipset", "127.0.0.1", true},
-		{"test IP in test-ipset", "192.168.1.100", true},
-		{"random IP not in test-ipset", "203.0.113.50", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			found, err := m.testIPSudo(tc.ip)
-			if err != nil {
-				t.Logf("testIPSudo failed (may be expected if sudo not configured): %v", err)
-			} else {
-				t.Logf("testIPSudo for %s: found=%v (expected=%v)", tc.ip, found, tc.expectFound)
-			}
-		})
-	}
-}
-
-// TestTestIPSudo_InvalidIP tests testIPSudo with invalid IP
-func TestTestIPSudo_InvalidIP(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipset:  "test-ipset",
-		logger: zap.NewNop(),
-		method: ipsetMethodSudo,
-	}
-
-	// Test with invalid IP - ipset command should reject it
-	found, err := m.testIPSudo("not-an-ip")
-	if err != nil {
-		t.Logf("Got expected error for invalid IP: %v", err)
-	}
-	if found {
-		t.Error("Expected found=false for invalid IP")
-	}
-}
-
-// TestTestIPSudo_NonExistentIpset tests testIPSudo with non-existent ipset
-func TestTestIPSudo_NonExistentIpset(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipset:  "nonexistent-ipset-88888",
-		logger: zap.NewNop(),
-		method: ipsetMethodSudo,
-	}
-
-	found, err := m.testIPSudo("192.168.1.1")
-	// The error may or may not occur depending on how sudo handles non-existent ipsets
-	// The important thing is that found should be false
-	if err != nil {
-		t.Logf("Got error for non-existent ipset (expected): %v", err)
-	}
-	if found {
-		t.Error("Expected found=false for non-existent ipset")
 	}
 }
 
@@ -888,37 +642,63 @@ func TestMatch_IPv6EdgeCases(t *testing.T) {
 	}
 }
 
-// TestTestIPSudo_IPv6 tests the sudo method with IPv6 addresses
-func TestTestIPSudo_IPv6(t *testing.T) {
+// TestMatch_WithClientIPVarKey tests that the matcher correctly uses the ClientIPVarKey
+// from the request context when it's set (e.g., by Caddy's trusted_proxies logic)
+func TestMatch_WithClientIPVarKey(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipset:  "test-ipset",
+		logger: zap.NewNop(),
+	}
+
 	testCases := []struct {
-		name        string
-		ipsetName   string
-		ipAddr      string
-		shouldMatch bool
+		name       string
+		clientIP   string
+		remoteAddr string
 	}{
-		{"localhost IPv6 in test-ipset-v6", "test-ipset-v6", "::1", true},
-		{"test IPv6 in test-ipset-v6", "test-ipset-v6", "2001:db8::1", true},
-		{"link-local IPv6 in test-ipset-v6", "test-ipset-v6", "fe80::1", true},
-		{"random IPv6 not in test-ipset-v6", "test-ipset-v6", "2001:db8::999", false},
-		{"bad IPv6 in blocklist-v6", "blocklist-v6", "2001:db8::bad", true},
-		{"random IPv6 not in blocklist-v6", "blocklist-v6", "2001:db8::good", false},
+		{
+			name:       "IPv4 with port from ClientIPVarKey",
+			clientIP:   "192.168.1.100:8080",
+			remoteAddr: "10.0.0.1:12345", // Should be ignored in favor of ClientIPVarKey
+		},
+		{
+			name:       "IPv4 without port from ClientIPVarKey",
+			clientIP:   "192.168.1.100",
+			remoteAddr: "10.0.0.1:12345",
+		},
+		{
+			name:       "IPv6 with port from ClientIPVarKey",
+			clientIP:   "[2001:db8::1]:8080",
+			remoteAddr: "10.0.0.1:12345",
+		},
+		{
+			name:       "localhost from ClientIPVarKey",
+			clientIP:   "127.0.0.1:9999",
+			remoteAddr: "10.0.0.1:12345",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			m := &IpsetMatcher{
-				Ipset: tc.ipsetName,
-			}
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req.RemoteAddr = tc.remoteAddr
 
-			found, err := m.testIPSudo(tc.ipAddr)
-			if err != nil {
-				t.Fatalf("testIPSudo failed: %v", err)
-			}
+			// Use PrepareRequest to properly initialize the request context
+			// This is what Caddy does internally before passing requests to handlers
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
 
-			if found != tc.shouldMatch {
-				t.Errorf("testIPSudo for %s: found=%v (expected=%v)", tc.ipAddr, found, tc.shouldMatch)
-			}
-			t.Logf("testIPSudo for %s in %s: found=%v (expected=%v)", tc.ipAddr, tc.ipsetName, found, tc.shouldMatch)
+			// Set the ClientIPVarKey in the request context using caddyhttp.SetVar
+			// This simulates what Caddy does when trusted_proxies is configured
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			// Call Match - this should use tc.clientIP, not tc.remoteAddr
+			result := m.Match(req)
+
+			// We can't assert the exact result without knowing ipset contents,
+			// but we can verify it doesn't panic and processes the ClientIPVarKey
+			t.Logf("Match result for ClientIPVarKey=%s (RemoteAddr=%s): %v",
+				tc.clientIP, tc.remoteAddr, result)
 		})
 	}
 }

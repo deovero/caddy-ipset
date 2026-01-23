@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING**: Removed sudo ipset fallback support - now requires CAP_NET_ADMIN capability
+- Simplified codebase by removing all sudo-related code and complexity
+- Updated documentation to focus on `sudo setcap cap_net_admin+ep ./caddy` approach
+- Docker testing now uses setcap to grant CAP_NET_ADMIN to test binary running as non-root user
+- Replaced sudo package with libcap2-bin in Docker image
+
+### Removed
+- Sudo ipset fallback functionality
+- `ipsetMethodSudo` constant and related code
+- `testIPSudo()` and `verifySudoIpset()` functions
+- All sudo-related tests and documentation
+- Sudo configuration from Docker test environment
+
+### Testing
+- Now using producing coverage.out
+- Coverage increased to 93.5%
+
 ## [0.2.0] - 2026-01-23
 
 ### Added

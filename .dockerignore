@@ -9,8 +9,7 @@ docker-compose.yml
 
 # Build artifacts
 *.test
-coverage.txt
-caddy-ipset.test
+coverage.out
 
 # IDE
 .vscode

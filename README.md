@@ -4,8 +4,7 @@ A Caddy HTTP matcher module that matches requests based on client IP addresses a
 
 ## Features
 
-- **Native kernel communication** - Uses netlink to communicate directly with the Linux kernel (if possible)
-- **Automatic fallback** - Falls back to `sudo ipset` when running as non-privileged user
+- **Native kernel communication** - Uses netlink to communicate directly with the Linux kernel
 - Match HTTP requests against existing Linux ipset lists
 - Uses Caddy's built-in client IP detection (respects `trusted_proxies` configuration)
 - Automatic ipset validation on startup
@@ -18,18 +17,13 @@ A Caddy HTTP matcher module that matches requests based on client IP addresses a
 
 This module integrates with Caddy's request matcher system to check if a client's IP address is present in a specified Linux ipset.
 
-**Access Methods:**
-1. **Netlink (preferred)** - Uses the `vishvananda/netlink` library to communicate directly with the Linux kernel via netlink, providing native, high-performance ipset lookups without spawning external processes. Requires CAP_NET_ADMIN capability.
-2. **Sudo fallback** - If netlink access is denied (permission error), automatically falls back to using `sudo ipset` commands. This allows the module to work when Caddy runs as a non-privileged user.
-
-The module automatically detects which method to use during provisioning and logs the selected method.
+The module uses the `vishvananda/netlink` library to communicate directly with the Linux kernel via netlink, providing native, high-performance ipset lookups without spawning external processes. This requires the CAP_NET_ADMIN capability.
 
 ## Requirements
 
 - Linux system with ipset kernel module loaded
 - Caddy v2
-- **For netlink access (preferred):** CAP_NET_ADMIN capability or root
-- **For sudo fallback:** Passwordless sudo access to ipset commands (see Permissions section)
+- CAP_NET_ADMIN capability (see [Permissions section](#permissions))
 
 ## Installation
 
@@ -39,12 +33,30 @@ The module automatically detects which method to use during provisioning and log
 xcaddy build --with github.com/deovero/caddy-ipset
 ```
 
-### Manual Build
+## Permissions
 
-1. Clone this repository
-2. Build with Go:
+The module requires CAP_NET_ADMIN capability to access ipset via netlink.
+
+### Grant CAP_NET_ADMIN capability
+
+This enables direct netlink access for maximum performance:
+
 ```bash
-go build
+sudo setcap cap_net_admin+ep ./caddy
+```
+
+**Advantages:**
+- High performance (direct kernel communication)
+- No process spawning overhead
+- No additional configuration needed
+
+**Note:** You can verify the capability is set with:
+```bash
+getcap ./caddy
+```
+should display
+```text
+./caddy cap_net_admin=ep
 ```
 
 ## Usage
@@ -106,8 +118,6 @@ example.com {
     respond "Welcome!" 200
 }
 ```
-
-This automatically extracts the real client IP from headers like `X-Forwarded-For`, `X-Real-IP`, or `Cf-Connecting-IP` when the request comes from a trusted proxy.
 
 ### JSON Configuration
 
@@ -190,86 +200,19 @@ maxretry = 5
 bantime = 3600
 ```
 
-## Permissions
-
-The module automatically selects the best access method based on available permissions:
-
-### Option 1: Grant CAP_NET_ADMIN capability (recommended for best performance)
-
-This enables direct netlink access for maximum performance:
-
-```bash
-sudo setcap cap_net_admin+ep ./caddy
-```
-
-**Advantages:**
-- Fastest performance (direct kernel communication)
-- No process spawning overhead
-- No sudo configuration needed
-
-### Option 2: Configure passwordless sudo (recommended for non-privileged users)
-
-If Caddy runs as a non-privileged user without CAP_NET_ADMIN, the module automatically falls back to `sudo ipset`. Configure passwordless sudo:
-
-**Step 1:** Create a sudoers file for your Caddy user (replace `caddy` with your actual username):
-
-```bash
-sudo visudo -f /etc/sudoers.d/caddy
-```
-
-**Step 2:** Add this line (replace `caddy` with your username):
-
-```
-caddy ALL=(ALL) NOPASSWD: /usr/sbin/ipset
-```
-
-**Step 3:** Save and exit (Ctrl+X, then Y, then Enter in nano)
-
-**Step 4:** Verify it works as user (replace `caddy` with your username):
-
-```bash
-sudo -u caddy bash -c 'sudo -n ipset list -n'
-```
-
-If this command runs without asking for a password, you're all set!
-
-**Advantages:**
-- Works with non-privileged Caddy processes
-- No capability management needed
-- Automatic fallback (no configuration required)
-
-**Important Notes:**
-- The `-n` flag is used by the module to ensure sudo doesn't prompt for a password
-- If you see "sudo requires password" errors, the NOPASSWD configuration is not working
-- Make sure the path `/usr/sbin/ipset` matches your system (check with `which ipset`)
-
-### Option 3: Run Caddy as root (not recommended for production)
-
-```bash
-sudo caddy run
-```
-
-**Only use this for testing!** Running web servers as root is a security risk.
-
 ## Logging
 
 The module provides detailed logging:
 
 - **Info**:
-  - When the module is provisioned (includes which access method is being used: "netlink" or "sudo")
+  - When the module is provisioned
   - When an IP matches the ipset
-- **Warn**: When netlink access is denied and falling back to sudo
 - **Debug**: When an IP is not in the ipset
 - **Error**: When there are issues parsing IPs or accessing ipset
 
 Example log output:
 ```
-INFO ipset matcher provisioned using native netlink {"ipset": "blocklist", "method": "netlink"}
-```
-or
-```
-WARN netlink access denied, falling back to sudo ipset {"ipset": "blocklist"}
-INFO ipset matcher provisioned using sudo fallback {"ipset": "blocklist", "method": "sudo"}
+INFO ipset matcher provisioned using netlink {"ipset": "blocklist"}
 ```
 
 ## Testing
@@ -300,6 +243,8 @@ make test-full
 make help           # Show all available commands
 make docker-build   # Build the Docker test image
 make docker-test    # Run tests in Docker container
+make coverage       # Generate coverage.out file
+make coverage-html  # Generate HTML coverage report (opens in browser)
 make docker-shell   # Open interactive shell in container
 make docker-clean   # Clean up Docker resources
 make check-ipset    # Check ipset configuration in container
@@ -326,7 +271,7 @@ Inside the container, you can run tests manually:
 go test -v ./...
 
 # Run with coverage
-go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
 
 # Run specific test
 go test -v -run TestProvision ./...
@@ -395,7 +340,7 @@ curl -6 http://localhost:20080
 **Cause**: The ipset list doesn't exist or Caddy doesn't have permission to access it.
 
 **Solution**:
-1. Verify the ipset exists: `sudo ipset list <name>`
+1. Verify the ipset exists: `sudo ipset list -n <name>`
 2. Check Caddy has the necessary permissions (see Permissions section)
 3. Ensure the ipset name is spelled correctly in your configuration
 
@@ -433,59 +378,18 @@ curl -6 http://localhost:20080
 
 **Error message:**
 ```
-Error: loading initial config: ... ipset 'test-ipset' does not exist or cannot be accessed: operation not permitted
+Error: loading initial config: ... ipset 'test-ipset' cannot be accessed: permission denied
 ```
 
-**Cause**: Caddy doesn't have permission to access netlink, and the sudo fallback also failed (likely because sudo requires a password).
+**Cause**: Caddy doesn't have CAP_NET_ADMIN capability to access netlink.
 
-**Solution**:
-
-**Option A - Configure passwordless sudo (easiest):**
-
-1. Test if sudo works without password:
-   ```bash
-   sudo -n ipset list
-   ```
-
-2. If it asks for a password, configure passwordless sudo:
-   ```bash
-   sudo visudo -f /etc/sudoers.d/caddy
-   ```
-
-3. Add this line (replace `your_username` with the user running Caddy):
-   ```
-   your_username ALL=(ALL) NOPASSWD: /usr/sbin/ipset
-   ```
-
-4. Verify it works:
-   ```bash
-   sudo -n ipset list
-   ```
-   Should run without asking for a password.
-
-**Option B - Grant CAP_NET_ADMIN capability (better performance):**
+**Solution**: Grant the capability to the Caddy binary:
 
 ```bash
 sudo setcap cap_net_admin+ep /path/to/caddy
 ```
 
-Then restart Caddy. Check logs - you should see "method: netlink" instead of "method: sudo".
-
-### Sudo password prompts or "sudo: no tty present"
-
-**Cause**: The sudo configuration requires a password, but Caddy can't provide one interactively (the module uses `sudo -n` for non-interactive mode).
-
-**Solution**: Configure passwordless sudo for the user running Caddy (see Permissions section, Option 2). Make sure the sudoers file includes `NOPASSWD` for the ipset command.
-
-### Module using sudo fallback but you want netlink
-
-**Cause**: Caddy doesn't have CAP_NET_ADMIN capability.
-
-**Solution**: Grant the capability to the Caddy binary:
-```bash
-sudo setcap cap_net_admin+ep /usr/bin/caddy
-```
-Then restart Caddy. Check the logs - you should see "method: netlink" instead of "method: sudo".
+Then restart Caddy.
 
 ## License
 

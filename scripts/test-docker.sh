@@ -38,40 +38,46 @@ go vet ./...
 echo -e "${GREEN}✓ go vet passed${NC}"
 echo ""
 
-# Run tests with different permission levels
-echo -e "${YELLOW}Running tests as root (netlink access)...${NC}"
-go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+# Build the test binary first
+echo -e "${YELLOW}Building test binary...${NC}"
+go test -c -o /tmp/caddy-ipset.test
+BUILD_EXIT_CODE=$?
+
+if [ $BUILD_EXIT_CODE -ne 0 ]; then
+    echo -e "${RED}✗ Build failed${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ Test binary built${NC}"
+echo ""
+
+# Grant CAP_NET_ADMIN capability to the test binary
+echo -e "${YELLOW}Granting CAP_NET_ADMIN capability to test binary...${NC}"
+setcap cap_net_admin+ep /tmp/caddy-ipset.test
+echo -e "${GREEN}✓ Capability granted${NC}"
+echo ""
+
+# Run tests as non-root user with CAP_NET_ADMIN capability
+echo -e "${YELLOW}Running tests as non-root user (testuser) with CAP_NET_ADMIN...${NC}"
+su - testuser -c "cd /workspace && /tmp/caddy-ipset.test -test.v -test.race -test.coverprofile=/workspace/coverage.out"
 TEST_EXIT_CODE=$?
 
 if [ $TEST_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✓ Tests passed as root${NC}"
+    echo -e "${GREEN}✓ Tests passed${NC}"
 else
-    echo -e "${RED}✗ Tests failed as root${NC}"
+    echo -e "${RED}✗ Tests failed${NC}"
 fi
 echo ""
 
 # Show coverage
-if [ -f coverage.txt ]; then
+if [ -f coverage.out ]; then
     echo -e "${YELLOW}Test coverage:${NC}"
-    go tool cover -func=coverage.txt | tail -n 1
+    go tool cover -func=coverage.out | tail -n 1
     echo ""
 fi
 
-# Test as non-root user (sudo fallback)
-echo -e "${YELLOW}Running tests as non-root user (sudo fallback)...${NC}"
-su - testuser -c "export PATH=/usr/local/go/bin:$PATH && cd /workspace && go test -v ./..."
-SUDO_TEST_EXIT_CODE=$?
-
-if [ $SUDO_TEST_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✓ Tests passed as non-root user${NC}"
-else
-    echo -e "${RED}✗ Tests failed as non-root user${NC}"
-fi
-echo ""
-
 # Build the module
 echo -e "${YELLOW}Building module...${NC}"
-go build -v ./...
+go build -v .
 BUILD_EXIT_CODE=$?
 
 if [ $BUILD_EXIT_CODE -eq 0 ]; then
@@ -85,7 +91,7 @@ echo ""
 echo "========================================="
 echo "Test Summary"
 echo "========================================="
-if [ $TEST_EXIT_CODE -eq 0 ] && [ $SUDO_TEST_EXIT_CODE -eq 0 ] && [ $BUILD_EXIT_CODE -eq 0 ]; then
+if [ $TEST_EXIT_CODE -eq 0 ] && [ $BUILD_EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}All tests passed!${NC}"
     exit 0
 else

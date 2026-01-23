@@ -10,13 +10,11 @@ help:
 	@echo "  make test-quick      - Quick test (build + run tests)"
 	@echo "  make test-full       - Full test suite with coverage"
 	@echo "  make clean-full      - Clean first, then full test suite with coverage"
+	@echo "  make coverage        - Generate coverage.out file"
+	@echo "  make coverage-html   - Generate HTML coverage report (opens in browser)"
 	@echo "  make docker-shell    - Open interactive shell in container"
 	@echo "  make docker-clean    - Remove Docker containers and images"
 	@echo "  make docker-rebuild  - Clean and rebuild everything"
-	@echo ""
-	@echo "Examples:"
-	@echo "  make test-quick      # Fastest way to run tests"
-	@echo "  make docker-shell    # Debug interactively"
 	@echo ""
 	@echo "Development targets:"
 	@echo "  make format          - Format all Go files with gofmt"
@@ -43,10 +41,10 @@ test-full: docker-build
 		go vet ./... && \
 		echo '' && \
 		echo '=== Running tests with coverage ===' && \
-		go test -v -race -coverprofile=coverage.txt -covermode=atomic ./... && \
+		go test -v -race -coverprofile=coverage.out -covermode=atomic ./... && \
 		echo '' && \
 		echo '=== Coverage report ===' && \
-		go tool cover -func=coverage.txt && \
+		go tool cover -func=coverage.out && \
 		echo '' && \
 		echo '=== Building module ===' && \
 		go build -v ./..."
@@ -80,6 +78,29 @@ check-ipset:
 	@echo "Checking ipset configuration in container..."
 	docker-compose run --rm caddy-ipset-test bash -c "ipset list -n && echo '' && ipset list"
 
+# Generate coverage for IntelliJ/GoLand
+coverage:
+	@echo "Generating coverage report..."
+	docker-compose run --rm caddy-ipset-test bash -c "\
+		go test -coverprofile=coverage.out -covermode=atomic ./... && \
+		echo '' && \
+		echo '✓ Coverage file generated: coverage.out' && \
+		echo '' && \
+		go tool cover -func=coverage.out"
+
+# Generate HTML coverage report and open in browser
+coverage-html:
+	@echo "Generating HTML coverage report..."
+	@docker-compose run --rm caddy-ipset-test bash -c "\
+		go test -coverprofile=coverage.out -covermode=atomic ./... && \
+		go tool cover -html=coverage.out -o coverage.html && \
+		echo '' && \
+		echo '✓ Coverage HTML report generated: coverage.html' && \
+		echo '' && \
+		go tool cover -func=coverage.out"
+	@echo ""
+	@echo "Opening coverage report in browser..."
+	@open coverage.html 2>/dev/null || xdg-open coverage.html 2>/dev/null || echo "Please open coverage.html in your browser"
 
 # Development targets
 .PHONY: format vet

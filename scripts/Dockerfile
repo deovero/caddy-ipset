@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     ipset \
     iptables \
-    sudo \
+    libcap2-bin \
     curl \
     git \
     ca-certificates \
@@ -36,8 +36,7 @@ ENV PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr
 ENV CGO_ENABLED=1
 
 # Create a non-root user for testing
-RUN useradd -m -s /bin/bash testuser \
-    && echo "testuser ALL=(ALL) NOPASSWD: /usr/sbin/ipset" >> /etc/sudoers
+RUN useradd -m -s /bin/bash testuser
 
 # Set working directory
 WORKDIR /workspace
