@@ -31,7 +31,7 @@ docker-build:
 # Run tests in Docker container
 docker-test:
 	@echo "Running tests in Docker container..."
-	docker-compose run --rm caddy-ipset-test /workspace/test-docker.sh
+	docker-compose run --rm caddy-ipset-test /workspace/scripts/test-docker.sh
 
 # Quick test - build and run
 test-quick: docker-build docker-test
@@ -58,7 +58,7 @@ clean-full: docker-clean test-full
 # Open interactive shell in container
 docker-shell:
 	@echo "Opening interactive shell in Docker container..."
-	@echo "Run './test-docker.sh' inside the container to run tests"
+	@echo "Run './scripts/test-docker.sh' inside the container to run tests"
 	docker-compose run --rm caddy-ipset-test /bin/bash
 
 # Clean up Docker resources

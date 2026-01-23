@@ -103,7 +103,7 @@ go test -v ./...
 
 ### Docker Setup
 
-1. **Dockerfile**: Creates an Ubuntu 22.04 container with:
+1. **scripts/Dockerfile**: Creates an Ubuntu 22.04 container with:
    - Go 1.25
    - ipset and iptables
    - Test ipsets pre-configured
@@ -155,7 +155,7 @@ make docker-shell
 
 ### Slow Docker builds
 
-**Solution**: The Dockerfile uses layer caching. If you need to rebuild:
+**Solution**: The scripts/Dockerfile uses layer caching. If you need to rebuild:
 ```bash
 make docker-rebuild
 ```
