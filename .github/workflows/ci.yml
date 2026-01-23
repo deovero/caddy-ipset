@@ -23,6 +23,43 @@ jobs:
       with:
         go-version: ${{ matrix.go-version }}
 
+    - name: Install ipset
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ipset
+
+    - name: Set up test ipsets
+      run: |
+        # Create IPv4 test ipsets
+        sudo ipset create test-ipset hash:ip 2>/dev/null || sudo ipset flush test-ipset
+        sudo ipset create blocklist hash:ip 2>/dev/null || sudo ipset flush blocklist
+        sudo ipset create empty hash:ip 2>/dev/null || sudo ipset flush empty
+        
+        # Create IPv6 test ipsets
+        sudo ipset create test-ipset-v6 hash:ip family inet6 2>/dev/null || sudo ipset flush test-ipset-v6
+        sudo ipset create blocklist-v6 hash:ip family inet6 2>/dev/null || sudo ipset flush blocklist-v6
+        sudo ipset create empty-v6 hash:ip family inet6 2>/dev/null || sudo ipset flush empty-v6
+        
+        # Add some test IPv4 addresses
+        sudo ipset add test-ipset 127.0.0.1 2>/dev/null || true
+        sudo ipset add test-ipset 192.168.1.100 2>/dev/null || true
+        sudo ipset add blocklist 10.0.0.1 2>/dev/null || true
+        
+        # Add some test IPv6 addresses
+        sudo ipset add test-ipset-v6 ::1 2>/dev/null || true
+        sudo ipset add test-ipset-v6 2001:db8::1 2>/dev/null || true
+        sudo ipset add test-ipset-v6 fe80::1 2>/dev/null || true
+        sudo ipset add blocklist-v6 2001:db8::bad 2>/dev/null || true
+        
+        # Verify ipsets were created
+        echo "Created ipsets:"
+        sudo ipset list -n
+
+    - name: Configure passwordless sudo for ipset
+      run: |
+        echo "$USER ALL=(ALL) NOPASSWD: /usr/sbin/ipset" | sudo tee /etc/sudoers.d/ipset-ci
+        sudo chmod 0440 /etc/sudoers.d/ipset-ci
+
     - name: Cache Go modules
       uses: actions/cache@v4
       with:
@@ -95,4 +132,3 @@ jobs:
           gofmt -s -l .
           exit 1
         fi
-
