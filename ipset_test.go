@@ -120,19 +120,6 @@ func TestMatch_InvalidRemoteAddr(t *testing.T) {
 	}
 }
 
-func TestMatch_CloudflareHeader(t *testing.T) {
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "10.0.0.1:12345"
-	req.Header.Set("Cf-Connecting-Ip", "192.168.1.1")
-
-	// Note: This will attempt to run ipset command
-	// In a real test, you'd mock exec.Command
-	// For now, we just verify the header is read
-	if req.Header.Get("Cf-Connecting-Ip") != "192.168.1.1" {
-		t.Error("Cloudflare header not set correctly")
-	}
-}
-
 func TestMatch_InvalidIP(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipset:  "test-ipset",
@@ -383,7 +370,6 @@ func TestMatch_IPv6(t *testing.T) {
 	t.Logf("Match result for IPv6: %v", result)
 }
 
-
 // TestProvision_FullIntegration tests the full provisioning flow
 // This test requires the Docker environment with test-ipset created
 func TestProvision_FullIntegration(t *testing.T) {
@@ -461,10 +447,10 @@ func TestMatch_FullIntegration(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name          string
-		remoteAddr    string
-		expectMatch   bool
-		description   string
+		name        string
+		remoteAddr  string
+		expectMatch bool
+		description string
 	}{
 		{
 			name:        "localhost should match",
@@ -502,9 +488,9 @@ func TestMatch_FullIntegration(t *testing.T) {
 // TestMatch_ErrorHandling tests error handling in Match
 func TestMatch_ErrorHandling(t *testing.T) {
 	testCases := []struct {
-		name       string
-		matcher    *IpsetMatcher
-		remoteAddr string
+		name        string
+		matcher     *IpsetMatcher
+		remoteAddr  string
 		expectFalse bool
 	}{
 		{
@@ -551,7 +537,6 @@ func TestMatch_ErrorHandling(t *testing.T) {
 		})
 	}
 }
-
 
 // TestVerifySudoIpset_Success tests successful sudo ipset verification
 func TestVerifySudoIpset_Success(t *testing.T) {
@@ -704,3 +689,236 @@ func TestTestIPSudo_NonExistentIpset(t *testing.T) {
 	}
 }
 
+// TestProvision_IPv6Ipsets tests provisioning with IPv6 ipsets
+func TestProvision_IPv6Ipsets(t *testing.T) {
+	testCases := []struct {
+		name          string
+		ipsetName     string
+		shouldSucceed bool
+	}{
+		{"existing IPv6 ipset", "test-ipset-v6", true},
+		{"another IPv6 ipset", "blocklist-v6", true},
+		{"empty IPv6 ipset", "empty-v6", true},
+		{"non-existent IPv6 ipset", "does-not-exist-v6", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &IpsetMatcher{
+				Ipset: tc.ipsetName,
+			}
+
+			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+			defer cancel()
+
+			err := m.Provision(ctx)
+
+			if tc.shouldSucceed {
+				if err != nil {
+					t.Errorf("Expected provision to succeed for %s, got error: %v", tc.ipsetName, err)
+				}
+				if m.logger == nil {
+					t.Error("Expected logger to be set after provision")
+				}
+			} else {
+				if err == nil {
+					t.Errorf("Expected provision to fail for non-existent ipset %s", tc.ipsetName)
+				}
+			}
+		})
+	}
+}
+
+// TestMatch_IPv6FullIntegration tests IPv6 matching with real IPv6 ipsets
+func TestMatch_IPv6FullIntegration(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipset: "test-ipset-v6",
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Failed to provision matcher: %v", err)
+	}
+
+	testCases := []struct {
+		name        string
+		remoteAddr  string
+		shouldMatch bool
+	}{
+		{"localhost IPv6 should match", "[::1]:8080", true},
+		{"test IPv6 should match", "[2001:db8::1]:8080", true},
+		{"link-local IPv6 should match", "[fe80::1]:8080", true},
+		{"random IPv6 should not match", "[2001:db8::999]:8080", false},
+		{"different IPv6 should not match", "[fd00::1]:8080", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req.RemoteAddr = tc.remoteAddr
+
+			result := m.Match(req)
+			if result != tc.shouldMatch {
+				t.Errorf("%s: Match=%v, expected=%v", tc.name, result, tc.shouldMatch)
+			}
+			t.Logf("%s is %sin test-ipset-v6: Match=%v (expected=%v)",
+				tc.remoteAddr,
+				map[bool]string{true: "", false: "not "}[tc.shouldMatch],
+				result,
+				tc.shouldMatch)
+		})
+	}
+}
+
+// TestMatch_IPv6WithRemoteAddr tests IPv6 matching with various remote address formats
+func TestMatch_IPv6WithRemoteAddr(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipset: "test-ipset-v6",
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Failed to provision matcher: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+	req.RemoteAddr = "[2001:db8::1]:12345" // IPv6 remote addr
+
+	result := m.Match(req)
+	if !result {
+		t.Error("Expected IPv6 from RemoteAddr to match")
+	}
+	t.Logf("IPv6 from RemoteAddr matched: %v", result)
+}
+
+// TestMatch_MixedIPv4AndIPv6 tests that IPv4 addresses don't match IPv6 ipsets
+func TestMatch_MixedIPv4AndIPv6(t *testing.T) {
+	testCases := []struct {
+		name        string
+		ipsetName   string
+		remoteAddr  string
+		shouldMatch bool
+	}{
+		{"IPv4 against IPv4 ipset", "test-ipset", "127.0.0.1:8080", true},
+		{"IPv6 against IPv6 ipset", "test-ipset-v6", "[::1]:8080", true},
+		{"IPv4 against IPv6 ipset", "test-ipset-v6", "127.0.0.1:8080", false},
+		{"IPv6 against IPv4 ipset", "test-ipset", "[::1]:8080", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &IpsetMatcher{
+				Ipset: tc.ipsetName,
+			}
+
+			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+			defer cancel()
+
+			err := m.Provision(ctx)
+			if err != nil {
+				t.Fatalf("Failed to provision matcher: %v", err)
+			}
+
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req.RemoteAddr = tc.remoteAddr
+
+			result := m.Match(req)
+			if result != tc.shouldMatch {
+				t.Errorf("%s: Match=%v, expected=%v", tc.name, result, tc.shouldMatch)
+			}
+			t.Logf("%s: %s against %s: Match=%v (expected=%v)",
+				tc.name, tc.remoteAddr, tc.ipsetName, result, tc.shouldMatch)
+		})
+	}
+}
+
+// TestMatch_IPv6EdgeCases tests edge cases for IPv6 addresses
+func TestMatch_IPv6EdgeCases(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipset: "test-ipset-v6",
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Fatalf("Failed to provision matcher: %v", err)
+	}
+
+	testCases := []struct {
+		name        string
+		remoteAddr  string
+		shouldMatch bool
+		shouldError bool
+	}{
+		{"IPv6 with zone ID", "[fe80::1%eth0]:8080", false, true}, // Zone IDs not supported in ipset
+		{"IPv6 compressed", "[::1]:8080", true, false},
+		{"IPv6 full form", "[0000:0000:0000:0000:0000:0000:0000:0001]:8080", true, false},
+		{"IPv6 without brackets and port", "::1", true, false}, // Invalid format for RemoteAddr
+		{"IPv4-mapped IPv6", "[::ffff:127.0.0.1]:8080", false, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req.RemoteAddr = tc.remoteAddr
+
+			result := m.Match(req)
+
+			if tc.shouldError {
+				// For error cases, we expect Match to return false
+				if result {
+					t.Errorf("%s: Expected Match to return false for error case, got true", tc.name)
+				}
+			} else {
+				if result != tc.shouldMatch {
+					t.Errorf("%s: Match=%v, expected=%v", tc.name, result, tc.shouldMatch)
+				}
+			}
+			t.Logf("%s: %s: Match=%v (expected=%v, shouldError=%v)",
+				tc.name, tc.remoteAddr, result, tc.shouldMatch, tc.shouldError)
+		})
+	}
+}
+
+// TestTestIPSudo_IPv6 tests the sudo method with IPv6 addresses
+func TestTestIPSudo_IPv6(t *testing.T) {
+	testCases := []struct {
+		name        string
+		ipsetName   string
+		ipAddr      string
+		shouldMatch bool
+	}{
+		{"localhost IPv6 in test-ipset-v6", "test-ipset-v6", "::1", true},
+		{"test IPv6 in test-ipset-v6", "test-ipset-v6", "2001:db8::1", true},
+		{"link-local IPv6 in test-ipset-v6", "test-ipset-v6", "fe80::1", true},
+		{"random IPv6 not in test-ipset-v6", "test-ipset-v6", "2001:db8::999", false},
+		{"bad IPv6 in blocklist-v6", "blocklist-v6", "2001:db8::bad", true},
+		{"random IPv6 not in blocklist-v6", "blocklist-v6", "2001:db8::good", false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &IpsetMatcher{
+				Ipset: tc.ipsetName,
+			}
+
+			found, err := m.testIPSudo(tc.ipAddr)
+			if err != nil {
+				t.Fatalf("testIPSudo failed: %v", err)
+			}
+
+			if found != tc.shouldMatch {
+				t.Errorf("testIPSudo for %s: found=%v (expected=%v)", tc.ipAddr, found, tc.shouldMatch)
+			}
+			t.Logf("testIPSudo for %s in %s: found=%v (expected=%v)", tc.ipAddr, tc.ipsetName, found, tc.shouldMatch)
+		})
+	}
+}

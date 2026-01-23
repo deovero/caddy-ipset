@@ -124,9 +124,12 @@ go test -v ./...
 
 The container automatically creates these test ipsets:
 
-- `test-ipset`: Contains 127.0.0.1, 192.168.1.100
-- `blocklist`: Contains 10.0.0.1
-- `empty`: Empty (for testing)
+- `test-ipset`: Contains 127.0.0.1, 192.168.1.100 (IPv4)
+- `test-ipset-v6`: Contains ::1, 2001:db8::1, fe80::1 (IPv6)
+- `blocklist`: Contains 10.0.0.1 (IPv4)
+- `blocklist-v6`: Contains 2001:db8::bad (IPv6)
+- `empty`: Empty (IPv4, for testing)
+- `empty-v6`: Empty (IPv6, for testing)
 
 ## Troubleshooting
 

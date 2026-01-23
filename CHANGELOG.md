@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker testing guide (DOCKER-TESTING.md)
 - Automated test scripts for macOS users (test-docker.sh)
 - macOS testing section in README.md
+- Added IPv6 example to 'Testing the Module' section in README.md
+- Pre-commit hook for automatic code formatting and vetting before commit
 
 ### Fixed
 - Improved check for netlink access
@@ -24,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Makefile with convenient commands for Docker-based testing
 - .dockerignore for optimized Docker builds
 - Improved test coverage from 39.9 to 85.4 %
+- Fixed testing as non-root
 
 ## [0.1.0] - 2026-01-22
 

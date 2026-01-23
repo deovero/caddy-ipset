@@ -6,8 +6,7 @@
 //
 // This module allows you to match HTTP requests against existing Linux ipset lists.
 // It uses Caddy's built-in client IP detection which respects the trusted_proxies
-// configuration, automatically handling X-Forwarded-For, X-Real-IP, Cf-Connecting-IP,
-// and other proxy headers when configured.
+// configuration.
 package caddy_ipset
 
 import (
@@ -110,8 +109,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 // Match returns true if the request's IP is in the configured ipset.
 func (m *IpsetMatcher) Match(req *http.Request) bool {
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
-	// This automatically handles X-Forwarded-For, X-Real-IP, Cf-Connecting-IP, and other headers
-	// based on the server's trusted_proxies setting
+	// This automatically handles the server's trusted_proxies setting.
 	var clientIPStr string
 	clientIP := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
 	if clientIP != nil {

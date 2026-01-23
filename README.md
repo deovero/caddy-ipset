@@ -225,10 +225,10 @@ caddy ALL=(ALL) NOPASSWD: /usr/sbin/ipset
 
 **Step 3:** Save and exit (Ctrl+X, then Y, then Enter in nano)
 
-**Step 4:** Verify it works:
+**Step 4:** Verify it works as user (replace `caddy` with your username):
 
 ```bash
-sudo -n ipset list
+sudo -u caddy bash -c 'sudo -n ipset list -n'
 ```
 
 If this command runs without asking for a password, you're all set!
@@ -341,8 +341,10 @@ To test if the module is working correctly:
 
 1. Create a test ipset:
 ```bash
-sudo ipset create test-ipset hash:ip
-sudo ipset add test-ipset 127.0.0.1
+sudo ipset create test-v4 hash:net family inet
+sudo ipset add test-v4 127.0.0.1
+sudo ipset create test-v6 hash:net family inet6
+sudo ipset add test-v6 ::1
 ```
 
 2. Configure Caddy with the matcher:
@@ -355,13 +357,21 @@ Create this `Caddyfile` in the directory of the `caddy` binary:
 	}
 }
 :20080 {
-	@matched {
-		ipset test-ipset
+	@match_v4 {
+		not remote_ip ::/0
+		ipset test-v4
 	}
-	handle @matched {
-		respond "IP is in the set!" 200
+	@match_v6 {
+		remote_ip ::/0
+		ipset test-v6
 	}
-	respond "IP is not in the set" 200
+	handle @match_v4 {
+		respond "IPv4 is in the set!" 200
+	}
+	handle @match_v6 {
+		respond "IPv6 is in the set!" 200
+	}
+	respond "IP is NOT in the sets" 200
 }
 ```
 
@@ -373,7 +383,9 @@ Create this `Caddyfile` in the directory of the `caddy` binary:
 4. Test with curl:
 ```bash
 curl -4 http://localhost:20080
-# Should return "IP is in the set!" if your IP is 127.0.0.1
+# Should return "IPv4 is in the set!" if your IP is 127.0.0.1
+curl -6 http://localhost:20080
+# Should return "IPv6 is in the set!" if your IP is ::1
 ```
 
 ## Troubleshooting
@@ -482,6 +494,41 @@ Apache License 2.0 - see LICENSE file for details
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.
+
+### Development Setup
+
+1. Clone the repository:
+```bash
+git clone https://github.com/deovero/caddy-ipset.git
+cd caddy-ipset
+```
+
+2. Install the pre-commit hook (automatically formats Go code):
+```bash
+make install-hooks
+```
+
+The pre-commit hook will:
+- Automatically format all staged Go files using `gofmt -s`
+- Run `go vet` to catch common mistakes
+- Re-stage formatted files automatically
+- Prevent commits if there are formatting or vet errors
+
+### Manual Formatting
+
+If you want to format files manually without committing:
+
+```bash
+# Format all Go files
+gofmt -s -w .
+
+# Run go vet
+go vet ./...
+```
+
+### Running Tests
+
+See the [Testing](#testing) section for detailed instructions on running tests locally using Docker.
 
 ## Authors
 

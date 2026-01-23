@@ -59,7 +59,7 @@ fi
 
 # Test as non-root user (sudo fallback)
 echo -e "${YELLOW}Running tests as non-root user (sudo fallback)...${NC}"
-su - testuser -c "cd /workspace && go test -v ./..."
+su - testuser -c "export PATH=/usr/local/go/bin:$PATH && cd /workspace && go test -v ./..."
 SUDO_TEST_EXIT_CODE=$?
 
 if [ $SUDO_TEST_EXIT_CODE -eq 0 ]; then
