@@ -11,7 +11,7 @@ NC='\033[0m' # No Color
 STAGED_GO_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$')
 
 if [ -z "$STAGED_GO_FILES" ]; then
-    # No Go files staged, exit successfully
+    echo -e "${GREEN}No Go files staged, skipping format and vet${NC}"
     exit 0
 fi
 
