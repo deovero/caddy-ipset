@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-01-23
+
 ### Changed
 - **BREAKING**: Removed sudo ipset fallback support - now requires CAP_NET_ADMIN capability
 - Using mutex to make netlink handle thead-safe
@@ -29,8 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sudo configuration from Docker test environment
 
 ### Testing
-- Now using producing coverage.out
-- Coverage increased to 92.3%
+- Coverage increased to 94.5%
+- Coverage is now written to coverage.out
 - Manual testing in Docker using xcaddy
 - Improved Makefile
 
@@ -107,5 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go version compatibility (Go 1.25)
 - Code formatting and linting issues
 
+[0.3.0]: https://github.com/deovero/caddy-ipset/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/deovero/caddy-ipset/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/deovero/caddy-ipset/releases/tag/v0.1.0
