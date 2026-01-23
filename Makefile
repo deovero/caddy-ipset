@@ -19,7 +19,6 @@ help:
 	@echo "  make docker-shell    # Debug interactively"
 	@echo ""
 	@echo "Development targets:"
-	@echo "  make install-hooks   - Install git pre-commit hook"
 	@echo "  make format          - Format all Go files with gofmt"
 	@echo "  make vet             - Run go vet on all files"
 
@@ -83,7 +82,7 @@ check-ipset:
 
 
 # Development targets
-.PHONY: install-hooks format vet
+.PHONY: format vet
 
 # Install git pre-commit hook
 
@@ -101,10 +100,3 @@ vet:
 	else \
 		echo "Note: Go not found. Run 'make test-quick' to run go vet in Docker"; \
 	fi
-install-hooks:
-	@echo "Installing pre-commit hook..."
-	@cp scripts/pre-commit .git/hooks/pre-commit
-	@chmod +x .git/hooks/pre-commit
-	@echo "✓ Pre-commit hook installed"
-	@echo "The hook will automatically format Go files and run go vet before each commit"
-

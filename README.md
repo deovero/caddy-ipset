@@ -505,7 +505,7 @@ cd caddy-ipset
 
 2. Install the pre-commit hook (automatically formats Go code):
 ```bash
-make install-hooks
+git  config  core.hooksPath  scripts
 ```
 
 The pre-commit hook will:
