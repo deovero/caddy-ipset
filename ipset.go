@@ -19,6 +19,7 @@ import (
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -38,6 +39,7 @@ type IpsetMatcher struct {
 	Ipset string `json:"ipset,omitempty"`
 
 	logger *zap.Logger
+	handle *netlink.Handle
 }
 
 // CaddyModule returns the Caddy module information.
@@ -61,54 +63,85 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("ERROR invalid ipset name '%s': must contain only alphanumeric characters, hyphens, underscores, and dots", m.Ipset)
 	}
 
+	// Create a persistent netlink handle for reuse across requests
+	// This avoids creating/destroying a socket for every HTTP request
+	handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+	if err != nil {
+		return fmt.Errorf("ERROR failed to create netlink handle: %w", err)
+	}
+	m.handle = handle
+	m.logger.Debug("Opened netlink handle", zap.String("ipset", m.Ipset))
+
 	// Verify the ipset exists using netlink
 	if err := m.verifyNetlinkIpset(); err != nil {
+		_ = m.Cleanup()
 		return err
 	}
 
 	return nil
 }
 
+// Cleanup closes the netlink handle when the module is unloaded.
+func (m *IpsetMatcher) Cleanup() error {
+	if m.handle != nil {
+		m.handle.Close()
+		m.logger.Debug("Closed netlink handle", zap.String("ipset", m.Ipset))
+		m.handle = nil
+	}
+	return nil
+}
+
 // Match returns true if the request's IP is in the configured ipset.
 func (m *IpsetMatcher) Match(req *http.Request) bool {
-	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
-	var clientIPStr string
-	clientIP := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
-	if clientIP != nil {
-		// Use the client IP determined by Caddy's trusted proxy logic
-		clientIPStr = clientIP.(string)
-	} else {
-		// Fallback to RemoteAddr if ClientIPVarKey is not set
-		// This shouldn't normally happen in a Caddy HTTP handler context
-		clientIPStr = req.RemoteAddr
-	}
-
-	// Extract IP address, stripping port if present
-	// ClientIPVarKey and RemoteAddr may both contain port numbers
-	remoteIP, _, err := net.SplitHostPort(clientIPStr)
-	if err != nil {
-		// If SplitHostPort fails, the string might be just an IP without a port
-		// Use it directly
-		remoteIP = clientIPStr
-	}
-
-	// Parse the IP address
-	ip := net.ParseIP(remoteIP)
-	if ip == nil {
-		m.logger.Error("Invalid IP address",
-			zap.String("ip", remoteIP))
+	// Check if handle is initialized (should be set during Provision)
+	if m.handle == nil {
+		if m.logger != nil {
+			m.logger.Error("Netlink handle not initialized - matcher not properly provisioned")
+		}
 		return false
 	}
 
-	// Match using netlink
-	found, err := netlink.IpsetTest(
+	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
+	var clientIP string
+	clientIPvar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
+	if clientIPvar != nil {
+		// Use the client IP determined by Caddy's trusted proxy logic
+		clientIP = clientIPvar.(string)
+		m.logger.Debug("Received client ip from Caddy", zap.String(caddyhttp.ClientIPVarKey, clientIP))
+	} else {
+		// Fallback to RemoteAddr if ClientIPVarKey is not set
+		// This shouldn't normally happen in a Caddy HTTP handler context
+		m.logger.Debug("Fallback to RemoteAddr", zap.String("RemoteAddr", req.RemoteAddr))
+		// Extract IP address, stripping port if present
+		var err error
+		clientIP, _, err = net.SplitHostPort(req.RemoteAddr)
+		if err != nil {
+			// If SplitHostPort fails, the address might not have a port
+			// Try using it directly as an IP address
+			clientIP = req.RemoteAddr
+			m.logger.Debug("RemoteAddr has no port, using as-is",
+				zap.String("RemoteAddr", req.RemoteAddr))
+		}
+	}
+
+	// Parse the IP address
+	ip := net.ParseIP(clientIP)
+	if ip == nil {
+		m.logger.Error("Invalid IP address",
+			zap.String("ip", clientIP))
+		return false
+	}
+
+	// Match using netlink handle
+	// Use the persistent handle to avoid creating a new socket for each request
+	found, err := m.handle.IpsetTest(
 		m.Ipset,
 		&netlink.IPSetEntry{IP: ip},
 	)
 
 	if err != nil {
 		m.logger.Error("Error testing IP against ipset",
-			zap.String("ip", remoteIP),
+			zap.String("ip", clientIP),
 			zap.String("ipset", m.Ipset),
 			zap.Error(err))
 		return false
@@ -116,20 +149,20 @@ func (m *IpsetMatcher) Match(req *http.Request) bool {
 
 	if !found {
 		m.logger.Debug("IP not in ipset",
-			zap.String("ip", remoteIP),
+			zap.String("ip", clientIP),
 			zap.String("ipset", m.Ipset))
 		return false
 	}
 
 	m.logger.Debug("IP matched in ipset",
-		zap.String("ip", remoteIP),
+		zap.String("ip", clientIP),
 		zap.String("ipset", m.Ipset))
 	return true
 }
 
 // verifyNetlinkIpset verifies that netlink can access the ipset
 func (m *IpsetMatcher) verifyNetlinkIpset() error {
-	result, err := netlink.IpsetList(m.Ipset)
+	result, err := m.handle.IpsetList(m.Ipset)
 	if err == nil {
 		m.logger.Info("Tested access to netlink ipset, success",
 			zap.String("ipset", m.Ipset),
@@ -174,9 +207,9 @@ func isPermissionError(err error) bool {
 // Family codes are from NFPROTO_* constants in Linux kernel
 func familyToString(family uint8) string {
 	switch family {
-	case 2: // NFPROTO_IPV4
+	case unix.NFPROTO_IPV4:
 		return "inet"
-	case 10: // NFPROTO_IPV6
+	case unix.NFPROTO_IPV6:
 		return "inet6"
 	default:
 		return fmt.Sprintf("unknown(%d)", family)
@@ -186,5 +219,6 @@ func familyToString(family uint8) string {
 // Interface guards
 var (
 	_ caddy.Provisioner     = (*IpsetMatcher)(nil)
+	_ caddy.CleanerUpper    = (*IpsetMatcher)(nil)
 	_ caddyfile.Unmarshaler = (*IpsetMatcher)(nil)
 )

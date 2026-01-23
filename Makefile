@@ -1,24 +1,23 @@
-.PHONY: help test format vet clean build rebuild clean-full docker-shell docker-test test-full test-specific coverage coverage-html check-ipset
+.PHONY: help test format vet clean build rebuild shell clean-full test-specific coverage coverage-html check-ipset docker-test
 
 # Default target
 help:
 	@echo "Docker-based testing for caddy-ipset (macOS compatible)"
 	@echo ""
 	@echo "Available targets:"
-	@echo "  make test              - Quick test (build + run tests)"
+	@echo "  make test              - Build + run docker-test"
 	@echo "  make format            - Format all Go files with gofmt"
 	@echo "  make vet               - Run go vet on all files"
 	@echo "  make clean             - Remove Docker containers and images"
 	@echo "  make build             - Build the Docker test image"
 	@echo "  make rebuild           - Clean and rebuild everything"
-	@echo "  make clean-full        - Clean first, then full test suite with coverage"
-	@echo "  make docker-shell      - Open interactive shell in container"
-	@echo "  make docker-test       - Run tests in Docker container"
-	@echo "  make test-full         - Full test suite with coverage"
+	@echo "  make shell             - Open interactive Docker shell in container"
+	@echo "  make clean-test        - Clean first, then test"
 	@echo "  make test-specific     - Run specific test (use TEST=TestName)"
 	@echo "  make coverage          - Generate coverage.out file"
 	@echo "  make coverage-html     - Generate HTML coverage report (opens in browser)"
 	@echo "  make check-ipset       - Check ipset configuration in container"
+	@echo "  make docker-test       - Run tests in Docker container"
 
 # Build the Docker image
 build:
@@ -33,27 +32,11 @@ docker-test:
 # Quick test - build and run
 test: build docker-test
 
-# Full test suite with detailed output
-test-full: build
-	@echo "Running full test suite..."
-	docker-compose run --rm caddy-ipset-test bash -c "\
-		echo '=== Running go vet ===' && \
-		go vet ./... && \
-		echo '' && \
-		echo '=== Running tests with coverage ===' && \
-		go test -v -race -coverprofile=coverage.out -covermode=atomic ./... && \
-		echo '' && \
-		echo '=== Coverage report ===' && \
-		go tool cover -func=coverage.out && \
-		echo '' && \
-		echo '=== Building module ===' && \
-		go build -v ./..."
-
-# Clean first, then full test suite with coverage
-clean-full: clean test-full
+# Clean first, then test
+clean-test: clean test
 
 # Open interactive shell in container
-docker-shell:
+shell:
 	@echo "Opening interactive shell in Docker container..."
 	@echo "Run './scripts/test-docker.sh' inside the container to run tests"
 	docker-compose run --rm caddy-ipset-test /bin/bash

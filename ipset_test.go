@@ -726,11 +726,26 @@ func TestMatch_IPv6EdgeCases(t *testing.T) {
 
 // TestMatch_WithClientIPVarKey tests that the matcher correctly uses the ClientIPVarKey
 // from the request context when it's set (e.g., by Caddy's trusted_proxies logic)
+// This test specifically hits the code path at lines 107-110 in ipset.go
 func TestMatch_WithClientIPVarKey(t *testing.T) {
+	// First provision the matcher so it has a valid handle
 	m := &IpsetMatcher{
-		Ipset:  "test-ipset-v4",
-		logger: zap.NewNop(),
+		Ipset: "test-ipset-v4",
 	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed (may be expected in non-Docker environment): %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
 
 	testCases := []struct {
 		name       string
@@ -738,23 +753,18 @@ func TestMatch_WithClientIPVarKey(t *testing.T) {
 		remoteAddr string
 	}{
 		{
-			name:       "IPv4 with port from ClientIPVarKey",
-			clientIP:   "192.168.1.100:8080",
+			name:       "IPv4 without port from ClientIPVarKey",
+			clientIP:   "192.168.1.100",
 			remoteAddr: "10.0.0.1:12345", // Should be ignored in favor of ClientIPVarKey
 		},
 		{
-			name:       "IPv4 without port from ClientIPVarKey",
-			clientIP:   "192.168.1.100",
-			remoteAddr: "10.0.0.1:12345",
-		},
-		{
-			name:       "IPv6 with port from ClientIPVarKey",
-			clientIP:   "[2001:db8::1]:8080",
-			remoteAddr: "10.0.0.1:12345",
-		},
-		{
 			name:       "localhost from ClientIPVarKey",
-			clientIP:   "127.0.0.1:9999",
+			clientIP:   "127.0.0.1",
+			remoteAddr: "10.0.0.1:12345",
+		},
+		{
+			name:       "IPv6 from ClientIPVarKey",
+			clientIP:   "2001:db8::1",
 			remoteAddr: "10.0.0.1:12345",
 		},
 	}
@@ -774,7 +784,8 @@ func TestMatch_WithClientIPVarKey(t *testing.T) {
 			// This simulates what Caddy does when trusted_proxies is configured
 			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
 
-			// Call Match - this should use tc.clientIP, not tc.remoteAddr
+			// Call Match - this should use tc.clientIP from ClientIPVarKey, not tc.remoteAddr
+			// This hits the code path at lines 107-110 in ipset.go where clientIPvar != nil
 			result := m.Match(req)
 
 			// We can't assert the exact result without knowing ipset contents,

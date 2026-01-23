@@ -39,7 +39,7 @@ This will:
 make test
 
 # Full test suite with detailed coverage
-make test-full
+make test
 
 # Run specific test
 make test-specific TEST=TestProvision
@@ -55,7 +55,7 @@ make check-ipset
 make build
 
 # Open interactive shell in container
-make docker-shell
+make shell
 
 # Clean up Docker resources
 make clean
@@ -72,7 +72,7 @@ make help
 For debugging or manual testing, open an interactive shell:
 
 ```bash
-make docker-shell
+make shell
 ```
 
 Inside the container, you can:
@@ -94,6 +94,7 @@ ipset list
 ipset add test-ipset-v4 192.168.1.50
 
 # Build caddy with the module
+pkill caddy
 xcaddy build --with github.com/deovero/caddy-ipset=/workspace
 ./caddy list-modules
 ./caddy run --config scripts/Caddyfile & sleep 2
@@ -155,7 +156,7 @@ chmod +x test-docker.sh
 
 **Solution**: The container's entrypoint should automatically create test ipsets. If not, run manually:
 ```bash
-make docker-shell
+make shell
 # Inside container:
 /usr/local/bin/setup-ipsets.sh
 ```
@@ -199,7 +200,7 @@ docker-compose down -v --rmi all
 
 ## Tips
 
-1. **Keep the container running**: Use `make docker-shell` and run multiple test commands without rebuilding
+1. **Keep the container running**: Use `make shell` and run multiple test commands without rebuilding
 2. **Watch mode**: Use a file watcher on macOS to automatically run tests when files change
 3. **Coverage reports**: Coverage files are written to the mounted volume and accessible on macOS
 4. **Debugging**: Add `fmt.Println()` or use `t.Logf()` in tests - output is visible in real-time

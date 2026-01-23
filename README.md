@@ -185,19 +185,14 @@ Since this module requires Linux kernel features (ipset), you can use Docker for
 # Run tests (builds image if needed)
 make test
 
-# Or run full test suite with coverage
-make test-full
-```
-
 #### Available Make Commands
 
 ```bash
 make help           # Show all available commands
 make test           # Run tests in Docker container
-make test-full      # Run full test suite with coverage
 make coverage       # Generate coverage.out file
 make coverage-html  # Generate HTML coverage report (opens in browser)
-make docker-shell   # Open interactive shell in container
+make shell   # Open interactive shell in container
 make clean          # Clean up Docker resources
 ```
 For the full list of commands, run `make help`.
@@ -287,16 +282,26 @@ curl -6 http://localhost:20080
 
 ## Troubleshooting
 
-### "ipset does not exist or cannot be accessed"
+### "ERROR ipset 'X' does not exist or cannot be accessed"
 
-**Cause**: The ipset list doesn't exist or Caddy doesn't have permission to access it.
+**Error message:**
+```
+Error: loading initial config: ... ERROR ipset 'test-ipset-v4' does not exist or cannot be accessed
+```
+
+**Cause**: The ipset list doesn't exist.
 
 **Solution**:
 1. Verify the ipset exists: `sudo ipset list -n <name>`
-2. Check Caddy has the necessary permissions (see Permissions section)
+2. Create the ipset if it doesn't exist (see [Creating an IPSet](#creating-an-ipset) section)
 3. Ensure the ipset name is spelled correctly in your configuration
 
-### "invalid ipset name"
+### "ERROR invalid ipset name"
+
+**Error message:**
+```
+Error: loading initial config: ... ERROR invalid ipset name 'my ipset': must contain only alphanumeric characters, hyphens, underscores, and dots
+```
 
 **Cause**: The ipset name contains invalid characters.
 
@@ -318,14 +323,14 @@ curl -6 http://localhost:20080
    }
    ```
 
-### "operation not permitted" error
+### "ERROR ipset 'X' cannot be accessed: permission denied"
 
 **Error message:**
 ```
-Error: loading initial config: ... ipset 'test-ipset-v4' cannot be accessed: permission denied
+Error: loading initial config: ... ERROR ipset 'test-ipset-v4' cannot be accessed: permission denied. Grant CAP_NET_ADMIN capability with: sudo setcap cap_net_admin+ep ./caddy
 ```
 
-**Cause**: Caddy doesn't have CAP_NET_ADMIN capability to access netlink.
+**Cause**: Caddy doesn't have CAP_NET_ADMIN capability to access ipset via netlink.
 
 **Solution**: Grant the capability to the Caddy binary:
 
@@ -334,6 +339,20 @@ sudo setcap cap_net_admin+ep /path/to/caddy
 ```
 
 Then restart Caddy.
+
+### "unknown ipset data attribute from kernel" messages
+
+**Log messages:**
+```
+INFO    unknown ipset data attribute from kernel: {Type:21 Value:[12]} 21
+INFO    unknown ipset data attribute from kernel: {Type:16401 Value:[241 100 79 57]} 17
+```
+
+**Cause**: The `vishvananda/netlink` library logs attributes it receives from the kernel but doesn't explicitly parse (such as CIDR2, MAC addresses, or other extended ipset attributes).
+
+**Impact**: These are harmless informational messages. The ipset matcher works correctly - the library simply doesn't extract every possible attribute into its result structure.
+
+**Solution**: No action needed. These messages can be safely ignored. If you want to suppress them, you can adjust your logging configuration to filter INFO level messages from the netlink library.
 
 ## License
 

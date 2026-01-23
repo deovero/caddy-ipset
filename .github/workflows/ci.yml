@@ -60,14 +60,6 @@ jobs:
     - name: Run tests with capability
       run: /tmp/caddy-ipset.test -test.v -test.coverprofile=coverage.out
 
-    - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v4
-      with:
-        file: ./coverage.out
-        flags: unittests
-        name: codecov-umbrella
-      continue-on-error: true
-
   lint:
     name: Lint
     runs-on: ubuntu-latest
