@@ -176,7 +176,10 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		New: func() interface{} {
 			handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
 			if err != nil {
-				m.logger.Error("failed to create netlink handle", zap.Error(err))
+				m.logger.Error("failed to create netlink handle",
+					zap.Error(err),
+					zap.Uint64("instance_id", m.instanceID),
+				)
 				return nil
 			}
 
@@ -263,6 +266,10 @@ func (m *IpsetMatcher) Cleanup() error {
 	m.handlePool = nil
 	m.ipsetFamilies = nil
 
+	m.logger.Info("ipset matcher cleaned up",
+		zap.Uint64("instance_id", m.instanceID),
+	)
+
 	return nil
 }
 
@@ -289,15 +296,11 @@ func (m *IpsetMatcher) Cleanup() error {
 // Returns true if:
 //   - the client's IP address is found in at least one configured ipset.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
-	// Check if handle pool is initialized (should be set during Provision)
-	if m.handlePool == nil {
-		return false, fmt.Errorf("netlink handle pool not initialized - matcher not properly provisioned")
-	}
-
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
 	clientIPvar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
 	clientIP, ok := clientIPvar.(string)
 	if !ok {
+		// Should not happen because Caddy always sets this to a string
 		return false, fmt.Errorf("%s is not a string but a %T", caddyhttp.ClientIPVarKey, clientIPvar)
 	}
 
@@ -330,7 +333,10 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 		// Check for context cancellation (e.g., client disconnected)
 		select {
 		case <-ctx.Done():
-			return false, fmt.Errorf("request canceled while matching ipset '%s': %w", ipsetName, ctx.Err())
+			return false, fmt.Errorf(
+				"request canceled while matching ipset '%s': %w [instance_id=%d]",
+				ipsetName, ctx.Err(), m.instanceID,
+			)
 		default:
 			// Continue processing
 		}
@@ -348,7 +354,10 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 		found, err := handle.IpsetTest(ipsetName, entry)
 
 		if err != nil {
-			return false, fmt.Errorf("error testing IP '%s' against ipset '%s': %w", clientIP, ipsetName, err)
+			return false, fmt.Errorf(
+				"error testing IP '%s' against ipset '%s': %w [instance_id=%d]",
+				clientIP, ipsetName, err, m.instanceID,
+			)
 		}
 
 		// OR logic: if found in ANY ipset, return true immediately
@@ -424,13 +433,26 @@ func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 // getHandle retrieves a netlink handle from the pool and performs type checking.
 // Returns an error if the handle cannot be retrieved or is invalid.
 func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
+	// Check if handle pool is initialized (should be set during Provision)
+	if m.handlePool == nil {
+		return nil, fmt.Errorf(
+			"netlink handle pool not initialized - matcher not properly provisioned [instance_id=%d]",
+			m.instanceID,
+		)
+	}
 	handleInterface := m.handlePool.Get()
 	if handleInterface == nil {
-		return nil, fmt.Errorf("failed to get netlink handle from pool - creation failed")
+		return nil, fmt.Errorf(
+			"failed to get netlink handle from pool - creation failed [instance_id=%d]",
+			m.instanceID,
+		)
 	}
 	handle, ok := handleInterface.(*netlink.Handle)
 	if !ok || handle == nil {
-		return nil, fmt.Errorf("invalid handle from pool - expected *netlink.Handle, got %T", handleInterface)
+		return nil, fmt.Errorf(
+			"invalid handle from pool - expected *netlink.Handle, got %T [instance_id=%d]",
+			handleInterface, m.instanceID,
+		)
 	}
 	return handle, nil
 }
