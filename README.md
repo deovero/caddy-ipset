@@ -231,59 +231,165 @@ curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.101'
 
 ## Troubleshooting
 
-### "ERROR ipset 'X' does not exist or cannot be accessed"
+### "CAP_NET_ADMIN capability required"
 
 **Error message:**
 ```
-Error: loading initial config: ... ERROR ipset 'test-ipset-v4' does not exist or cannot be accessed
+Error: loading matcher modules: module name 'ipset': provision http.matchers.ipset: CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep /path/to/caddy
 ```
 
-**Cause**: The ipset list doesn't exist.
+**Cause**: The Caddy binary doesn't have the required CAP_NET_ADMIN capability to access ipset via netlink.
 
 **Solution**:
-1. Verify the ipset exists: `sudo ipset list -n <name>`
+1. Grant the capability to your Caddy binary:
+   ```bash
+   sudo setcap cap_net_admin+ep /path/to/your/caddy
+   ```
+2. Verify the capability is set:
+   ```bash
+   getcap ./caddy
+   # Should display: ./caddy cap_net_admin=ep
+   ```
+3. **Important**: If you replace or rebuild the Caddy binary, you'll need to grant the capability again.
+
+### "no such file or directory" during provision of ipset
+
+**Error message:**
+```
+Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: ipset 'X' does not exist or cannot be accessed: no such file or directory
+```
+
+**Cause**: The ipset list doesn't exist or Caddy cannot access it.
+
+**Solution**:
+1. Verify the ipset exists:
+   ```bash
+   sudo ipset list -n
+   # Or check a specific ipset:
+   sudo ipset list test-ipset-v4
+   ```
 2. Create the ipset if it doesn't exist (see [Creating an IPSet](#creating-an-ipset) section)
 3. Ensure the ipset name is spelled correctly in your configuration
 
-### "ERROR invalid ipset name"
+### "operation not permitted" during provision of ipset
 
 **Error message:**
 ```
-Error: loading initial config: ... ERROR invalid ipset name 'my ipset': must contain only alphanumeric characters, hyphens, underscores, and dots
+Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: ipset 'X' does not exist or cannot be accessed: operation not permitted
 ```
 
-**Cause**: The ipset name contains invalid characters.
+**Cause**: Caddy can't access the ipset due to insufficient permissions or systemd sandboxing.
 
-**Solution**: Ipset names must contain only alphanumeric characters, hyphens, underscores, and dots. Avoid spaces and special characters.
+**Solution**:
+
+**Option 1: Check CAP_NET_ADMIN capability**
+```bash
+getcap /path/to/caddy
+# Should show: /path/to/caddy cap_net_admin=ep
+```
+
+**Option 2: Adjust systemd service restrictions**
+
+When running Caddy as a systemd service, certain sandboxing options can prevent netlink access. Edit your systemd service file (e.g., `/etc/systemd/system/caddy.service`):
+
+```ini
+[Service]
+# These settings may interfere with netlink access:
+# PrivateTmp=true          # Can cause issues
+# ProtectSystem=strict     # Can cause issues
+# ProtectHome=true         # Usually OK
+```
+
+After modifying the service file:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart caddy
+```
+
+### "ipset name exceeds maximum length"
+
+**Error message:**
+```
+Error: ... ipset name 'very-long-name...' exceeds maximum length of 31 characters
+```
+
+**Cause**: Ipset names are limited to 31 characters by the Linux kernel.
+
+**Solution**: Use a shorter ipset name (31 characters or less).
+
+### "at least one ipset name is required"
+
+**Error message:**
+```
+Error: ... at least one ipset name is required
+```
+
+**Cause**: The ipset matcher is configured without any ipset names.
+
+**Solution**: Add at least one ipset name to your configuration:
+```caddyfile
+@blocked {
+    ipset blocklist-v4
+}
+```
 
 ### Requests are being blocked/allowed incorrectly
 
-**Cause**: IP address extraction might be incorrect, especially behind proxies.
+**Cause**: IP address extraction might be incorrect, especially when behind proxies or load balancers.
 
 **Solution**:
-1. Check Caddy logs to see which IP is being tested
-2. Configure `trusted_proxies` in your Caddyfile to extract the real client IP from proxy headers
-3. Specify the IP ranges of the proxy servers:
+1. Enable debug logging to see which IP is being tested:
    ```caddyfile
    {
-       servers {
-           trusted_proxies static 10.0.0.0/8 172.16.0.0/12
+       log {
+           level DEBUG
        }
    }
    ```
+2. Check the logs for messages like:
+   ```
+   DEBUG   IP matched in ipset    {"ip": "192.168.1.100", "ipset": "blocklist-v4"}
+   ```
+3. Configure `trusted_proxies` to extract the real client IP from proxy headers:
+   ```caddyfile
+   {
+       servers {
+           trusted_proxies static 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+       }
+   }
+   
+   ```
+4. Verify your ipset contains the expected IPs:
+   ```bash
+   sudo ipset list blocklist-v4
+   ```
 
-### "ipset 'X' does not exist or cannot be accessed: operation not permitted"
+### IPv4/IPv6 matching issues
 
-**Error message:**
-```
-Error: loading http app module: provision http: server srv0: setting up route handlers: route 0: loading handler modules: position 0: loading module 'subroute': provision http.handlers.subroute: setting up subroutes: route 6: loading matcher modules: module name 'ipset': provision http.matchers.ipset: ipset 'X' does not exist or cannot be accessed: operation not permitted
-```
+**Symptom**: IPv4 addresses aren't matching against your ipset, or vice versa for IPv6.
 
-**Cause**: Caddy can't access the ipset.
+**Cause**: IP family mismatch between the client IP and the ipset type.
 
-**Solution**: 
-When running Caddy as a Systemd service, make sure it is not too restricted.
-For example `PrivateTmp=true` or other sandboxing options like `ProtectSystem` can cause this issue.
+**Solution**:
+1. Verify your ipset family:
+   ```bash
+   sudo ipset list blocklist-v4 | grep "Type:"
+   # Should show: Type: hash:net family inet
+   ```
+2. Create separate ipsets for IPv4 and IPv6:
+   ```bash
+   sudo ipset create blocklist-v4 hash:net family inet
+   sudo ipset create blocklist-v6 hash:net family inet6
+   ```
+3. Configure both in your Caddyfile:
+   ```caddyfile
+   @blocked {
+       ipset blocklist-v4
+       ipset blocklist-v6
+   }
+   ```
+
+The module automatically skips mismatched IP families (you'll see debug messages like "skipped matching of IPv6 address against IPv4 ipset").
 
 ### "unknown ipset data attribute from kernel" messages
 
@@ -298,6 +404,30 @@ INFO    unknown ipset data attribute from kernel: {Type:16401 Value:[241 100 79 
 **Impact**: These are harmless informational messages. The ipset matcher works correctly - the library simply doesn't extract every possible attribute into its result structure.
 
 **Solution**: No action needed. These messages can be safely ignored. If you want to suppress them, you can adjust your logging configuration to filter INFO level messages from the netlink library.
+
+### "failed to create netlink handle"
+
+**Error message:**
+```
+Error: ... failed to create netlink handle: ...
+```
+
+**Cause**: Unable to create a netlink socket for communication with the kernel.
+
+**Solution**:
+1. Verify the ipset kernel module is loaded:
+   ```bash
+   lsmod | grep ip_set
+   # If not loaded:
+   sudo modprobe ip_set
+   ```
+2. Check system limits for file descriptors:
+   ```bash
+   ulimit -n
+   # Increase if needed:
+   ulimit -n 4096
+   ```
+3. Ensure CAP_NET_ADMIN capability is granted (see first troubleshooting section)
 
 ## License
 
