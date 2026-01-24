@@ -15,6 +15,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/petermattis/goid"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"go.uber.org/zap"
@@ -143,7 +144,9 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("failed to get capability flag: %w", err)
 	}
 	if hasNetAdmin {
-		m.logger.Debug("the process has CAP_NET_ADMIN capability")
+		m.logger.Debug("the process has CAP_NET_ADMIN capability",
+			zap.Int64("goroutine_id", goid.Get()),
+		)
 	} else {
 		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
 	}
@@ -172,6 +175,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 
 			m.logger.Debug("created new netlink handle for pool",
 				zap.Int("total_handles", len(m.createdHandles)),
+				zap.Int64("goroutine_id", goid.Get()),
 			)
 			return handle
 		},
@@ -212,6 +216,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 			zap.String("ipset", ipsetName),
 			zap.String("type", result.TypeName),
 			zap.String("family", familyCodeToString(result.Family)),
+			zap.Int64("goroutine_id", goid.Get()),
 		)
 	}
 
@@ -234,7 +239,10 @@ func (m *IpsetMatcher) Cleanup() error {
 	}
 
 	if len(m.createdHandles) > 0 {
-		m.logger.Debug("closed all netlink handles", zap.Int("count", len(m.createdHandles)))
+		m.logger.Debug("closed all netlink handles",
+			zap.Int("count", len(m.createdHandles)),
+			zap.Int64("goroutine_id", goid.Get()),
+		)
 	}
 
 	// Clear the slices and pool
