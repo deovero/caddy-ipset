@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.0] - 2026-01-24
 
+### Documentation
+- Improved inline module documentation
+
+## [0.4.0] - 2026-01-24
+
 ### Changed
 - Support for passing multiple ipsets to one matcher
 - Support for multiple ipset directives in one matcher block
