@@ -6,12 +6,10 @@
 package caddy_ipset
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"sync"
-	"syscall"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -20,23 +18,64 @@ import (
 	"github.com/vishvananda/netlink/nl"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
+	"kernel.org/pub/linux/libs/security/libcap/cap"
 )
 
 func init() {
 	caddy.RegisterModule((*IpsetMatcher)(nil))
 }
 
-// IpsetMatcher is a Linux-specific Caddy HTTP matcher that matches client IP against ipset lists.
+// IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
+//
+// This matcher provides high-performance IP matching by communicating directly
+// with the Linux kernel via netlink, avoiding the overhead of spawning external
+// processes.
+//
+// The matcher maintains a persistent netlink connection that is reused across
+// requests for optimal performance. Thread-safety is ensured through mutex
+// protection of the netlink handle.
+//
+// Requirements:
+//   - Linux system with ipset kernel module loaded
+//   - CAP_NET_ADMIN capability, grant with: `sudo setcap cap_net_admin+ep /path/to/caddy`
+//   - Existing ipset list created via the `ipset` command
+//
+// Supports both IPv4 and IPv6 ipsets and does basic validation during provisioning.
+// In case an IPv4 client_ip is matched against an IPv6 ipset or vise versa, the
+// matcher will return false.
+//
+// When multiple ipsets are configured, the matcher will return true if the
+// client_ip is in any of the ipsets (OR logic).
+//
+// Example Caddyfile usage:
+//
+// ```
+//
+//	example.com {
+//		@matcher {
+//			ipset test-ipset-v4
+//			ipset test-ipset-v6
+//		}
+//		handle @matcher {
+//			respond "IP matches an ipset" 200
+//		}
+//		respond "IP does NOT match any of the ipsets" 403
+//	}
+//
+// ```
 type IpsetMatcher struct {
-	// Ipset is the name of the ipset list to match against
-	Ipset string `json:"ipset,omitempty"`
+	// Ipsets is a list of ipset names to match against
+	// If the client IP is in ANY of these ipsets, the matcher returns true
+	Ipsets []string `json:"ipsets,omitempty"`
+
+	// handles stores netlink handles for each ipset
+	handles []*netlink.Handle
+	// ipsetFamilies stores the IP family (IPv4 or IPv6) for each ipset
+	ipsetFamilies []uint8
 
 	logger *zap.Logger
-	handle *netlink.Handle
-	// ipsetFamily stores the IP family (IPv4 or IPv6) of the ipset
-	// This is set during Provision and used to skip mismatched IP families during Match
-	ipsetFamily uint8
-	// mu protects concurrent access to the netlink handle
+
+	// mu protects concurrent access to the netlink handles
 	// The netlink socket is not thread-safe and must be protected.
 	// We use a mutex instead of a sync.Pool because netlink handles hold file descriptors
 	// that must be explicitly closed to avoid leaks during Caddy configuration reloads.
@@ -56,7 +95,9 @@ func (m *IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 // This method is called by Caddy during module initialization.
 //
 // It performs the following steps:
-//   - Validates that an ipset name is provided
+//   - Validates that at least one ipset name is configured
+//   - Checks for CAP_NET_ADMIN capability (fails fast with clear error)
+//   - For each ipset:
 //   - Validates the ipset name format and length
 //   - Creates a persistent netlink handle for efficient request processing
 //   - Verifies the ipset exists and is accessible
@@ -64,64 +105,103 @@ func (m *IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //
 // Returns an error if:
 //   - No ipset name is configured
-//   - The ipset name is too long
+//   - CAP_NET_ADMIN capability is not granted
+//   - An ipset name is empty or too long
 //   - Netlink handle creation fails
 //   - The ipset doesn't exist or cannot be accessed
-//   - Permission is denied (CAP_NET_ADMIN capability required)
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	m.logger = ctx.Logger(m)
 
-	if m.Ipset == "" {
-		return fmt.Errorf("ipset name is required")
+	if len(m.Ipsets) == 0 {
+		return fmt.Errorf("at least one ipset name is required")
 	}
 
-	// Validate ipset name length
-	if len(m.Ipset) >= nl.IPSET_MAXNAMELEN {
-		return fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", m.Ipset, nl.IPSET_MAXNAMELEN-1)
-	}
-
-	// Create a persistent netlink handle for reuse across requests
-	// This avoids creating/destroying a socket for every HTTP request
-	handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+	capSet := cap.GetProc()
+	// Check if the Effective set contains CAP_NET_ADMIN
+	// CAP_NET_ADMIN corresponds to capability number 12, usually defined as cap.NET_ADMIN
+	hasNetAdmin, err := capSet.GetFlag(cap.Effective, cap.NET_ADMIN)
 	if err != nil {
-		return fmt.Errorf("failed to create netlink handle: %w", err)
+		return fmt.Errorf("failed to get capability flag: %w", err)
 	}
-	m.handle = handle
-	m.logger.Debug("opened netlink handle", zap.String("ipset", m.Ipset))
+	if hasNetAdmin {
+		m.logger.Debug("the process has CAP_NET_ADMIN")
+	} else {
+		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep ./caddy")
+	}
 
-	// Verify the ipset exists using netlink
-	result, err := m.handle.IpsetList(m.Ipset)
-	if err != nil {
-		_ = m.Cleanup()
-		// Check if this is a permission error
-		if isPermissionError(err) {
-			return fmt.Errorf("ipset '%s' cannot be accessed: permission denied. Grant CAP_NET_ADMIN capability with: sudo setcap cap_net_admin+ep ./caddy", m.Ipset)
+	// Create netlink handles for each ipset
+	for _, ipsetName := range m.Ipsets {
+		// Validate ipset name is not empty
+		if ipsetName == "" {
+			return fmt.Errorf("ipset name is required")
 		}
-		// Not a permission error, ipset doesn't exist or other error
-		return fmt.Errorf("ipset '%s' does not exist or cannot be accessed: %w", m.Ipset, err)
+
+		// Validate ipset name length
+		if len(ipsetName) >= nl.IPSET_MAXNAMELEN {
+			return fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", ipsetName, nl.IPSET_MAXNAMELEN-1)
+		}
+
+		// Create a persistent netlink handle for reuse across requests
+		// This avoids creating/destroying a socket for every HTTP request
+		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+		if err != nil {
+			return fmt.Errorf("failed to create netlink handle: %w", err)
+		}
+
+		m.logger.Debug("opened netlink handle", zap.String("ipset", ipsetName))
+
+		// Verify the ipset exists using netlink
+		result, err := handle.IpsetList(ipsetName)
+		if err != nil {
+			// Close this handle and any previously created handles
+			handle.Close()
+			for _, h := range m.handles {
+				h.Close()
+			}
+			return fmt.Errorf("ipset '%s' does not exist or cannot be accessed: %w", ipsetName, err)
+		}
+
+		// Append the handle and family to the slices
+		m.handles = append(m.handles, handle)
+		m.ipsetFamilies = append(m.ipsetFamilies, result.Family)
+
+		m.logger.Info("validated ipset existence",
+			zap.String("ipset", ipsetName),
+			zap.String("type", result.TypeName),
+			zap.String("family", familyToString(result.Family)),
+		)
 	}
 
-	// Save the ipset family for later use in Match
-	m.ipsetFamily = result.Family
-	m.logger.Info("validated ipset existence",
-		zap.String("ipset", m.Ipset),
-		zap.String("type", result.TypeName),
-		zap.String("family", familyToString(result.Family)),
-	)
+	// Sanity check: ensure we have the same number of ipsets, handles and families
+	if len(m.Ipsets) != len(m.handles) || len(m.Ipsets) != len(m.ipsetFamilies) {
+		return fmt.Errorf("provision error, sanity check failed")
+	}
+
 	return nil
 }
 
-// Cleanup closes the netlink handle when the module is unloaded.
+// Cleanup closes all netlink handles when the module is unloaded.
 // This method is called by Caddy during graceful shutdown or module reload.
 // It ensures proper cleanup of system resources.
 func (m *IpsetMatcher) Cleanup() error {
-	if m.handle != nil {
+	if len(m.handles) > 0 {
 		// Lock the mutex to ensure we don't close while a Match is in progress
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		m.handle.Close()
-		m.logger.Debug("closed netlink handle", zap.String("ipset", m.Ipset))
-		m.handle = nil
+
+		// Close all handles
+		for i, handle := range m.handles {
+			if handle != nil {
+				handle.Close()
+				ipsetName := m.Ipsets[i]
+				m.logger.Debug("closed netlink handle", zap.String("ipset", ipsetName))
+			}
+		}
+
+		// Clear the slices
+		m.Ipsets = nil
+		m.handles = nil
+		m.ipsetFamilies = nil
 	}
 	return nil
 }
@@ -131,26 +211,27 @@ func (m *IpsetMatcher) Cleanup() error {
 // the trusted_proxies configuration.
 //
 // The matching process:
-//   - Extracts the client IP from the request (using Caddy's ClientIPVarKey or RemoteAddr)
+//   - Extracts the client_ip from the request
 //   - Validates the IP address format
-//   - Checks if the IP family matches the ipset family (optimization)
+//   - Checks each configured ipset in order
+//   - For each ipset, checks if the IP family matches (optimization)
 //   - Performs the ipset lookup via netlink
+//   - Returns true if found in ANY ipset (OR logic)
 //
 // Returns false + error if:
-//   - The netlink handle is not initialized
+//   - No netlink handles are initialized
 //   - The client IP cannot be determined or parsed
 //   - An error occurs during ipset lookup
 //
 // Returns false if:
-//   - The IP family doesn't match the ipset family
-//   - The IP is not found in the ipset
+//   - The IP is not found in any of the configured ipsets
 //
 // Returns true if:
-//   - the client's IP address is found in the configured ipset.
+//   - the client's IP address is found in at least one configured ipset.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
-	// Check if handle is initialized (should be set during Provision)
-	if m.handle == nil {
-		return false, fmt.Errorf("netlink handle not initialized - matcher not properly provisioned")
+	// Check if handles are initialized (should be set during Provision)
+	if len(m.handles) == 0 {
+		return false, fmt.Errorf("netlink handles not initialized - matcher not properly provisioned")
 	}
 
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
@@ -163,49 +244,72 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Parse the IP address
 	ip := net.ParseIP(clientIP)
 	if ip == nil {
-		return false, fmt.Errorf("invalid IP address: %s", clientIP)
+		return false, fmt.Errorf("invalid IP address '%s'", clientIP)
 	}
 
-	// Check if the IP family matches the ipset family
-	// Generating a warning because your Caddy configuration should prevent this.
+	// Check if the IP is in ANY of the configured ipsets (OR logic)
 	isIPv4 := ip.To4() != nil
-	if m.ipsetFamily == nl.FAMILY_V4 && !isIPv4 {
-		m.logger.Warn("skipped matching of IPv6 address against IPv4 ipset. Your config should prevent this.",
-			zap.String("ip", clientIP),
-			zap.String("ipset", m.Ipset))
-		return false, nil
-	}
-	if m.ipsetFamily == nl.FAMILY_V6 && isIPv4 {
-		m.logger.Warn("skipped matching of IPv4 address against IPv6 ipset. Your config should prevent this.",
-			zap.String("ip", clientIP),
-			zap.String("ipset", m.Ipset))
-		return false, nil
-	}
 
-	// Match using netlink handle
-	// Use the persistent handle to avoid creating a new socket for each request
-	// Lock the mutex to ensure thread-safe access to the netlink socket
+	// Lock the mutex to ensure thread-safe access to the netlink sockets
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	found, err := m.handle.IpsetTest(
-		m.Ipset,
-		&netlink.IPSetEntry{IP: ip},
-	)
 
-	if err != nil {
-		return false, fmt.Errorf("error testing IP '%s' against ipset '%s': %w", clientIP, m.Ipset, err)
+	for i, ipsetName := range m.Ipsets {
+		handle := m.handles[i]
+		if handle == nil {
+			m.logger.Error("netlink handle is nil, skipping ipset",
+				zap.String("ip", clientIP),
+				zap.String("ipset", ipsetName),
+			)
+			continue
+		}
+		// Check if the IP family matches the ipset family (optimization)
+		ipsetFamily := m.ipsetFamilies[i]
+		if ipsetFamily == nl.FAMILY_V4 && !isIPv4 {
+			m.logger.Debug("skipped matching of IPv6 address against IPv4 ipset",
+				zap.String("ip", clientIP),
+				zap.String("ipset", ipsetName))
+			continue
+		}
+		if ipsetFamily == nl.FAMILY_V6 && isIPv4 {
+			m.logger.Debug("skipped matching of IPv4 address against IPv6 ipset",
+				zap.String("ip", clientIP),
+				zap.String("ipset", ipsetName))
+			continue
+		}
+
+		// Test if the IP is in this ipset
+		found, err := handle.IpsetTest(
+			ipsetName,
+			&netlink.IPSetEntry{IP: ip},
+		)
+
+		if err != nil {
+			return false, fmt.Errorf("error testing IP '%s' against ipset '%s': %w", clientIP, ipsetName, err)
+		}
+
+		// OR logic: if found in ANY ipset, return true immediately
+		if found {
+			m.logger.Debug("IP matched in ipset",
+				zap.String("ip", clientIP),
+				zap.String("ipset", ipsetName),
+			)
+			return true, nil
+		}
+
+		// Not found in this ipset, continue to check the next one
+		m.logger.Debug("IP not in ipset, checking next",
+			zap.String("ip", clientIP),
+			zap.String("ipset", ipsetName),
+		)
 	}
 
-	message := "IP not in ipset"
-	if found {
-		message = "IP matched in ipset"
-	}
-	m.logger.Debug(message,
+	// Not found in any ipset
+	m.logger.Debug("IP not found in any ipset",
 		zap.String("ip", clientIP),
-		zap.String("ipset", m.Ipset),
+		zap.Int("ipsets_checked", len(m.Ipsets)),
 	)
-
-	return found, nil
+	return false, nil
 }
 
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler.
@@ -213,43 +317,45 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 //
 // Syntax:
 //
-//	ipset <name>
+// ```
+//
+//	ipset <name> <name> ...
+//	ipset <name> <name> <name> ...
+//
+// ```
 //
 // Example:
 //
-//	@blocked ipset blocklist-v4
-func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
-	for d.Next() {
-		if !d.Args(&m.Ipset) {
-			return d.ArgErr()
-		}
-		// Ensure no extra arguments are provided
-		if d.NextArg() {
-			return d.ArgErr()
-		}
-	}
-	return nil
-}
-
-// isPermissionError checks if an error is a permission-related error.
-// It handles both direct syscall errors and wrapped errors.
+// ```
+// @blocked ipset blocklist-v4
+// ```
 //
-// Returns true if the error is EPERM or EACCES, indicating that
-// CAP_NET_ADMIN capability is required.
-func isPermissionError(err error) bool {
-	if err == nil {
-		return false
+// Multiple ipset directives in a matcher block:
+//
+// ```
+//
+//	@matcher {
+//	    ipset test-ipset-v4
+//	    ipset test-ipset-v6
+//	}
+//
+// ```
+//
+// This creates a single matcher that checks if the client IP is in ANY of the
+// specified ipsets (OR logic).
+func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
+	// Process all ipset directives in the matcher block
+	for d.Next() {
+		for d.NextArg() {
+			m.Ipsets = append(m.Ipsets, d.Val())
+		}
 	}
-	// Check for direct syscall.Errno
-	if errno, ok := err.(syscall.Errno); ok {
-		return errno == syscall.EPERM || errno == syscall.EACCES
+
+	if len(m.Ipsets) == 0 {
+		return d.Err("expected at least one ipset name")
 	}
-	// Check for wrapped syscall.Errno using errors.As
-	var errno syscall.Errno
-	if errors.As(err, &errno) {
-		return errno == syscall.EPERM || errno == syscall.EACCES
-	}
-	return false
+
+	return nil
 }
 
 // familyToString converts the ipset family code to a readable string.

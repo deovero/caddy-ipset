@@ -95,18 +95,18 @@ ipset add test-ipset-v4 192.168.1.100
 
 # Build caddy with the module
 pkill caddy
+rm -f ./caddy
 xcaddy build --with github.com/deovero/caddy-ipset=/workspace
-./caddy list-modules
-./caddy run --config scripts/Caddyfile & sleep 2
-echo
+./caddy run & sleep 1
+echo -e "\n\nShould match:"
 curl http://127.0.0.1:20080
-echo
+echo -e "\n\nShould match:"
 curl http://[::1]:20080
-echo
+echo -e "\n\nShould NOT match:"
 curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.1'
-echo
+echo -e "\n\nShould match:"
 curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
-echo
+echo -e "\n"
 pkill caddy
 ```
 

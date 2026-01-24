@@ -7,6 +7,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	go.uber.org/zap v1.27.1
 	golang.org/x/sys v0.40.0
+	kernel.org/pub/linux/libs/security/libcap/cap v1.2.77
 )
 
 require (
@@ -130,4 +131,5 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.0 // indirect
+	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )

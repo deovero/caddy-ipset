@@ -59,12 +59,12 @@ test-specific:
 # Check ipset status in container
 check-ipset:
 	@echo "Checking ipset configuration in container..."
-	docker-compose run --rm caddy-ipset-test bash -c "ipset list -n && echo '' && ipset list"
+	docker-compose run --rm caddy-ipset-test bash -capSet "ipset list -n && echo '' && ipset list"
 
 # Generate coverage for IntelliJ/GoLand
 coverage:
 	@echo "Generating coverage report..."
-	docker-compose run --rm caddy-ipset-test bash -c "\
+	docker-compose run --rm caddy-ipset-test bash -capSet "\
 		go test -coverprofile=coverage.out -covermode=atomic ./... && \
 		echo '' && \
 		echo '✓ Coverage file generated: coverage.out' && \
@@ -74,7 +74,7 @@ coverage:
 # Generate HTML coverage report and open in browser
 coverage-html:
 	@echo "Generating HTML coverage report..."
-	@docker-compose run --rm caddy-ipset-test bash -c "\
+	@docker-compose run --rm caddy-ipset-test bash -capSet "\
 		go test -coverprofile=coverage.out -covermode=atomic ./... && \
 		go tool cover -html=coverage.out -o coverage.html && \
 		echo '' && \

@@ -1,6 +1,6 @@
 # Caddy IPSet Matcher
 
-A Linux-specific Caddy HTTP matcher module that matches client IP against ipset lists.
+Caddy HTTP matcher module that matches the client_ip against Linux ipset lists.
 
 ## Features
 
@@ -63,16 +63,32 @@ should display
 
 ### Caddyfile Configuration
 
-Block requests from IPs in an ipset:
+Example:
+
+```caddyfile
+example.com {
+	@matcher {
+		ipset test-ipset-v4
+		ipset test-ipset-v6
+	}
+	handle @matcher {
+		respond "IP matches an ipset" 200
+	}
+	respond "IP does NOT match any of the ipsets" 403
+}
+```
+
+When multiple ipset directives are used in a matcher block, Caddy creates multiple IpsetMatcher instances and ORs them together.
+If want to be a tiny bit more efficient you can only try the ipset matching the protocol family:
 
 ```caddyfile
 example.com {
     @blocked_v4 {
-        not remote_ip ::/0  # Only match IPv4
+        not remote_ip ::/0  # Only IPv4
         ipset blocklist-v4 
     }
     @blocked_v6 {
-        remote_ip ::/0  # Only match IPv6
+        remote_ip ::/0  # Only IPv6
         ipset blocklist-v6
     }
 
@@ -84,53 +100,6 @@ example.com {
     }
 
     respond "Welcome!" 200
-}
-```
-
-Allow only IPs in an ipset:
-
-```caddyfile
-admin.example.com {
-    @allowed {
-        ipset trusted-ips
-    }
-
-    handle @allowed {
-        reverse_proxy localhost:8080
-    }
-
-    respond "Unauthorized" 401
-}
-```
-
-### JSON Configuration
-
-```json
-{
-  "apps": {
-    "http": {
-      "servers": {
-        "srv0": {
-          "routes": [
-            {
-              "match": [
-                {
-                  "ipset": "blocklist-v4"
-                }
-              ],
-              "handle": [
-                {
-                  "handler": "static_response",
-                  "status_code": 403,
-                  "body": "Access Denied"
-                }
-              ]
-            }
-          ]
-        }
-      }
-    }
-  }
 }
 ```
 
@@ -241,7 +210,7 @@ sudo ipset add test-ipset-v6 ::1
 ```
 
 2. Configure Caddy with the matcher:
-Create this [Caddyfile](scripts/Caddyfile).
+Create this [Caddyfile](Caddyfile).
 
 3. Execute Caddy:
 ```bash

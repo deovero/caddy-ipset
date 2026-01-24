@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-01-24
+
+### Changed
+- Support for passing multiple ipsets to one matcher
+- Support for multiple ipset directives in one matcher block
+- When IP family doesn't match ipset family, log as debug instead of warning
+
+### Documentation
+- Improved module description
+- Examples with both IPv4 and IPv6 matching in one matcher
+
 ## [0.3.1] - 2026-01-23
 
 ### Documentation

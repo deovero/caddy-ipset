@@ -1,0 +1,19 @@
+{
+	admin off
+	log {
+		level DEBUG
+	}
+	servers {
+		trusted_proxies static 127.0.0.1
+	}
+}
+:20080 {
+	@matcher {
+		ipset test-ipset-v4
+		ipset test-ipset-v6
+	}
+	handle @matcher {
+		respond "--- IP matches an ipset ---" 200
+	}
+	respond "--- IP does NOT match any of the ipsets ---" 403
+}
