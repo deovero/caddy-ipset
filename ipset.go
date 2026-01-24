@@ -49,7 +49,7 @@ const (
 //   - Existing ipset list created via the `ipset` command
 //
 // Supports both IPv4 and IPv6 ipsets and does basic validation during provisioning.
-// In case an IPv4 client_ip is matched against an IPv6 ipset or vise versa, the
+// In case an IPv4 client_ip is matched against an IPv6 ipset or vice versa, the
 // matcher will return false.
 //
 // When multiple ipsets are configured, the matcher will return true if the
@@ -71,6 +71,8 @@ const (
 //	}
 //
 // ```
+//
+// Extended documentation can be found in [README.md](https://github.com/deovero/caddy-ipset/blob/main/README.md)
 type IpsetMatcher struct {
 	// Ipsets is a list of ipset names to match against
 	// If the client IP is in ANY of these ipsets, the matcher returns true

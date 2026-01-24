@@ -79,7 +79,7 @@ example.com {
 ```
 
 When multiple ipset directives are used in a matcher block, Caddy creates multiple IpsetMatcher instances and ORs them together.
-If want to be a tiny bit more efficient you can only try the ipset matching the protocol family:
+If you want to be a tiny bit more efficient you can only try the ipset matching the protocol family:
 
 ```caddyfile
 example.com {
