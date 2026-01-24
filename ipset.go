@@ -69,18 +69,20 @@ type IpsetMatcher struct {
 	// If the client IP is in ANY of these ipsets, the matcher returns true
 	Ipsets []string `json:"ipsets,omitempty"`
 
-	// handles stores netlink handles for each ipset
-	handles []*netlink.Handle
 	// ipsetFamilies stores the IP family (IPv4 or IPv6) for each ipset
 	ipsetFamilies []uint8
 
-	logger *zap.Logger
+	// handlePool provides a pool of netlink handles for concurrent access
+	// Each goroutine can borrow a handle from the pool, use it, and return it
+	// This allows concurrent ipset lookups without message correlation issues
+	handlePool *sync.Pool
 
-	// mu protects concurrent access to the netlink handles
-	// The netlink socket is not thread-safe and must be protected.
-	// We use a mutex instead of a sync.Pool because netlink handles hold file descriptors
-	// that must be explicitly closed to avoid leaks during Caddy configuration reloads.
-	mu *sync.Mutex
+	// createdHandles tracks all handles created by the pool for cleanup
+	// sync.Pool doesn't provide a way to drain all objects, so we track them separately
+	createdHandles []*netlink.Handle
+
+	// During Provision() we will store the logger from Caddy's context here.
+	logger *zap.Logger
 }
 
 // CaddyModule returns the Caddy module information.
@@ -111,8 +113,8 @@ func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - Netlink handle creation fails
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
+	// Get the logger from Caddy's context
 	m.logger = ctx.Logger(m)
-	m.mu = &sync.Mutex{}
 
 	if len(m.Ipsets) == 0 {
 		return fmt.Errorf("at least one ipset name is required")
@@ -131,7 +133,32 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
 	}
 
-	// Create netlink handles for each ipset
+	// Initialize the slice to track all created handles for cleanup
+	m.createdHandles = make([]*netlink.Handle, 0)
+
+	// Initialize the handle pool with a factory function
+	// Each goroutine can borrow a handle, use it, and return it
+	m.handlePool = &sync.Pool{
+		New: func() interface{} {
+			handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+			if err != nil {
+				m.logger.Error("failed to create netlink handle", zap.Error(err))
+				return nil
+			}
+
+			// Track this handle for cleanup
+			m.createdHandles = append(m.createdHandles, handle)
+
+			m.logger.Debug("created new netlink handle for pool",
+				zap.Int("total_handles", len(m.createdHandles)))
+			return handle
+		},
+	}
+
+	// Pre-allocate ipsetFamilies slice with known capacity
+	m.ipsetFamilies = make([]uint8, 0, len(m.Ipsets))
+
+	// Validate each ipset and store its family information
 	for _, ipsetName := range m.Ipsets {
 		// Validate ipset name is not empty
 		if ipsetName == "" {
@@ -143,28 +170,22 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 			return fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", ipsetName, nl.IPSET_MAXNAMELEN-1)
 		}
 
-		// Create a persistent netlink handle for reuse across requests
-		// This avoids creating/destroying a socket for every HTTP request
-		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
-		if err != nil {
-			return fmt.Errorf("failed to create netlink handle: %w", err)
+		// Borrow a handle from the pool to verify the ipset exists
+		handleInterface := m.handlePool.Get()
+		if handleInterface == nil {
+			return fmt.Errorf("failed to get netlink handle from pool")
 		}
-
-		m.logger.Debug("opened netlink handle", zap.String("ipset", ipsetName))
+		handle := handleInterface.(*netlink.Handle)
+		// Return the handle to the pool when done
+		defer m.handlePool.Put(handle)
 
 		// Verify the ipset exists using netlink
 		result, err := handle.IpsetList(ipsetName)
 		if err != nil {
-			// Close this handle and any previously created handles
-			handle.Close()
-			for _, h := range m.handles {
-				h.Close()
-			}
-			return fmt.Errorf("ipset '%s' does not exist or cannot be accessed: %w", ipsetName, err)
+			return fmt.Errorf("error checking ipset '%s': %w", ipsetName, err)
 		}
 
-		// Append the handle and family to the slices
-		m.handles = append(m.handles, handle)
+		// Store the family information for this ipset
 		m.ipsetFamilies = append(m.ipsetFamilies, result.Family)
 
 		m.logger.Info("validated ipset existence",
@@ -174,8 +195,8 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		)
 	}
 
-	// Sanity check: ensure we have the same number of ipsets, handles and families
-	if len(m.Ipsets) != len(m.handles) || len(m.Ipsets) != len(m.ipsetFamilies) {
+	// Sanity check: ensure we have the same number of ipsets and families
+	if len(m.Ipsets) != len(m.ipsetFamilies) {
 		return fmt.Errorf("provision error, sanity check failed")
 	}
 
@@ -186,23 +207,20 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 // This method is called by Caddy during graceful shutdown or module reload.
 // It ensures proper cleanup of system resources.
 func (m *IpsetMatcher) Cleanup() error {
-	if len(m.handles) > 0 {
-		// Lock the mutex to ensure we don't close while a Match is in progress
-		m.mu.Lock()
-		defer m.mu.Unlock()
-
-		// Close all handles
-		for i, handle := range m.handles {
+	if len(m.createdHandles) > 0 {
+		// Close all handles that were created by the pool
+		for _, handle := range m.createdHandles {
 			if handle != nil {
 				handle.Close()
-				ipsetName := m.Ipsets[i]
-				m.logger.Debug("closed netlink handle", zap.String("ipset", ipsetName))
 			}
 		}
 
-		// Clear the slices
+		m.logger.Debug("closed all netlink handles", zap.Int("count", len(m.createdHandles)))
+
+		// Clear the slices and pool
 		m.Ipsets = nil
-		m.handles = nil
+		m.createdHandles = nil
+		m.handlePool = nil
 		m.ipsetFamilies = nil
 	}
 	return nil
@@ -231,9 +249,9 @@ func (m *IpsetMatcher) Cleanup() error {
 // Returns true if:
 //   - the client's IP address is found in at least one configured ipset.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
-	// Check if handles are initialized (should be set during Provision)
-	if len(m.handles) == 0 {
-		return false, fmt.Errorf("netlink handles not initialized - matcher not properly provisioned")
+	// Check if handle pool is initialized (should be set during Provision)
+	if m.handlePool == nil {
+		return false, fmt.Errorf("netlink handle pool not initialized - matcher not properly provisioned")
 	}
 
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
@@ -252,19 +270,20 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Check if the IP is in ANY of the configured ipsets (OR logic)
 	isIPv4 := ip.To4() != nil
 
-	// Lock the mutex to ensure thread-safe access to the netlink sockets
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	// Reuse IPSetEntry to avoid allocation per ipset test
+	entry := &netlink.IPSetEntry{IP: ip}
+
+	// Borrow a handle from the pool for this request
+	// Each concurrent request gets its own handle, enabling true parallelism
+	handleInterface := m.handlePool.Get()
+	if handleInterface == nil {
+		return false, fmt.Errorf("failed to get netlink handle from pool")
+	}
+	handle := handleInterface.(*netlink.Handle)
+	// Return the handle to the pool when done
+	defer m.handlePool.Put(handle)
 
 	for i, ipsetName := range m.Ipsets {
-		handle := m.handles[i]
-		if handle == nil {
-			m.logger.Error("netlink handle is nil, skipping ipset",
-				zap.String("ip", clientIP),
-				zap.String("ipset", ipsetName),
-			)
-			continue
-		}
 		// Check if the IP family matches the ipset family (optimization)
 		ipsetFamily := m.ipsetFamilies[i]
 		if ipsetFamily == nl.FAMILY_V4 && !isIPv4 {
@@ -280,11 +299,8 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 			continue
 		}
 
-		// Test if the IP is in this ipset
-		found, err := handle.IpsetTest(
-			ipsetName,
-			&netlink.IPSetEntry{IP: ip},
-		)
+		// Test if the IP is in this ipset (reusing the entry allocation)
+		found, err := handle.IpsetTest(ipsetName, entry)
 
 		if err != nil {
 			return false, fmt.Errorf("error testing IP '%s' against ipset '%s': %w", clientIP, ipsetName, err)

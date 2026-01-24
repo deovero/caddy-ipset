@@ -565,8 +565,8 @@ func TestProvision_MultipleIpsets(t *testing.T) {
 					t.Error("Expected logger to be set")
 				}
 				// Verify all handles and families were created
-				if len(m.handles) != len(tc.ipsets) {
-					t.Errorf("Expected %d handles, got %d", len(tc.ipsets), len(m.handles))
+				if len(m.createdHandles) != len(tc.ipsets) {
+					t.Errorf("Expected %d handles, got %d", len(tc.ipsets), len(m.createdHandles))
 				}
 				if len(m.ipsetFamilies) != len(tc.ipsets) {
 					t.Errorf("Expected %d ipset families, got %d", len(tc.ipsets), len(m.ipsetFamilies))
@@ -1604,9 +1604,9 @@ func TestMatchWithError_ClientIPVarKeyNonString(t *testing.T) {
 // TestMatchWithError_UninitializedHandle tests the case where the handle is not initialized
 func TestMatchWithError_UninitializedHandle(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipsets:  []string{"test-ipset-v4"},
-		logger:  zap.NewNop(),
-		handles: nil, // Explicitly set to nil to simulate uninitialized state
+		Ipsets:     []string{"test-ipset-v4"},
+		logger:     zap.NewNop(),
+		handlePool: nil, // Explicitly set to nil to simulate uninitialized state
 	}
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
@@ -1671,13 +1671,13 @@ ipset test-ipset-v6`
 	}(matcher)
 
 	// Verify provisioning
-	if len(matcher.handles) != len(expectedIpsets) {
-		t.Errorf("Expected %d handles, got %d", len(expectedIpsets), len(matcher.handles))
+	if len(matcher.createdHandles) != len(expectedIpsets) {
+		t.Errorf("Expected %d handles, got %d", len(expectedIpsets), len(matcher.createdHandles))
 	}
 	if len(matcher.ipsetFamilies) != len(expectedIpsets) {
 		t.Errorf("Expected %d families, got %d", len(expectedIpsets), len(matcher.ipsetFamilies))
 	}
-	t.Logf("✓ Provisioned %d ipsets with handles and families", len(matcher.handles))
+	t.Logf("✓ Provisioned %d ipsets with handles and families", len(matcher.createdHandles))
 
 	// Test 3: Test matching with various IPs
 	testCases := []struct {

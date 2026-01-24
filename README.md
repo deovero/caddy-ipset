@@ -256,7 +256,7 @@ Error: loading matcher modules: module name 'ipset': provision http.matchers.ips
 
 **Error message:**
 ```
-Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: ipset 'X' does not exist or cannot be accessed: no such file or directory
+Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: error checking ipset 'X': no such file or directory
 ```
 
 **Cause**: The ipset list doesn't exist or Caddy cannot access it.
@@ -275,7 +275,7 @@ Error: ... loading matcher modules: module name 'ipset': provision http.matchers
 
 **Error message:**
 ```
-Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: ipset 'X' does not exist or cannot be accessed: operation not permitted
+Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: error checking ipset 'X': operation not permitted
 ```
 
 **Cause**: Caddy can't access the ipset due to insufficient permissions or systemd sandboxing.

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Using `sync.Pool` with a pool of netlink handles for concurrent access instead of a single mutex-protected handle
 - Show path to actual caddy binary in error message when CAP_NET_ADMIN is missing instead of just `./caddy`
 
 ### Documentation
