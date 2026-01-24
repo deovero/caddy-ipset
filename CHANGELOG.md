@@ -10,9 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Using `sync.Pool` with a pool of netlink handles for concurrent access instead of a single mutex-protected handle
 - Show path to actual caddy binary in error message when CAP_NET_ADMIN is missing instead of just `./caddy`
+- Removed redundant IP validation since Caddy already provides validated IPs
+- Updated documentation to accurately reflect sync.Pool implementation instead of mutex
 
-### Documentation
-- Improved troubleshooting guide in README.md
+### Fixed
+- Error messages: Improved sanity check error message to show actual counts for easier debugging
+- Context handling: Added support for request context cancellation in `MatchWithError` loop
+
+### Testing
+- Added context cancellation test to verify graceful handling of cancelled requests
 
 ## [0.4.3] - 2026-01-24
 

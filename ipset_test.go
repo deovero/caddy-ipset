@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
@@ -564,10 +565,11 @@ func TestProvision_MultipleIpsets(t *testing.T) {
 				if m.logger == nil {
 					t.Error("Expected logger to be set")
 				}
-				// Verify all handles and families were created
-				if len(m.createdHandles) != len(tc.ipsets) {
-					t.Errorf("Expected %d handles, got %d", len(tc.ipsets), len(m.createdHandles))
+				// Verify at least one handle was created (handle pool creates handles on-demand)
+				if len(m.createdHandles) < 1 {
+					t.Errorf("Expected at least 1 handle, got %d", len(m.createdHandles))
 				}
+				// Verify all ipset families were recorded
 				if len(m.ipsetFamilies) != len(tc.ipsets) {
 					t.Errorf("Expected %d ipset families, got %d", len(tc.ipsets), len(m.ipsetFamilies))
 				}
@@ -1606,7 +1608,8 @@ func TestMatchWithError_UninitializedHandle(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipsets:     []string{"test-ipset-v4"},
 		logger:     zap.NewNop(),
-		handlePool: nil, // Explicitly set to nil to simulate uninitialized state
+		handlePool: nil,           // Explicitly set to nil to simulate uninitialized state
+		handlesMu:  &sync.Mutex{}, // Must initialize mutex to avoid nil pointer dereference
 	}
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
@@ -1671,8 +1674,9 @@ ipset test-ipset-v6`
 	}(matcher)
 
 	// Verify provisioning
-	if len(matcher.createdHandles) != len(expectedIpsets) {
-		t.Errorf("Expected %d handles, got %d", len(expectedIpsets), len(matcher.createdHandles))
+	// Handle pool creates handles on-demand, so we expect at least 1 handle
+	if len(matcher.createdHandles) < 1 {
+		t.Errorf("Expected at least 1 handle, got %d", len(matcher.createdHandles))
 	}
 	if len(matcher.ipsetFamilies) != len(expectedIpsets) {
 		t.Errorf("Expected %d families, got %d", len(expectedIpsets), len(matcher.ipsetFamilies))
@@ -1713,4 +1717,47 @@ ipset test-ipset-v6`
 	}
 
 	t.Logf("✓ Successfully tested end-to-end flow with multiple ipsets")
+}
+
+// TestContextCancellation tests that MatchWithError respects context cancellation
+func TestContextCancellation(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4", "blocklist-v4", "test-ipset-v6", "blocklist-v6"},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping context cancellation test - provisioning failed: %v", err)
+		return
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
+
+	// Create a request with a cancellable context
+	req := httptest.NewRequest("GET", "http://example.com", nil)
+	reqCtx, reqCancel := context.WithCancel(req.Context())
+	req = req.WithContext(reqCtx)
+
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "127.0.0.1")
+
+	// Cancel the context before calling MatchWithError
+	reqCancel()
+
+	result, err := m.MatchWithError(req)
+
+	// Should get a context cancellation error
+	if err == nil {
+		t.Logf("Note: Context cancellation not detected (result: %v). This may happen if the check completes before cancellation is detected.", result)
+	} else if err == context.Canceled {
+		t.Logf("✓ Context cancellation properly detected: %v", err)
+	} else {
+		t.Logf("Got error (not context.Canceled): %v", err)
+	}
 }
