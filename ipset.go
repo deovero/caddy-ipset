@@ -22,7 +22,7 @@ import (
 )
 
 func init() {
-	caddy.RegisterModule((*IpsetMatcher)(nil))
+	caddy.RegisterModule(IpsetMatcher{})
 }
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
@@ -79,11 +79,11 @@ type IpsetMatcher struct {
 	// The netlink socket is not thread-safe and must be protected.
 	// We use a mutex instead of a sync.Pool because netlink handles hold file descriptors
 	// that must be explicitly closed to avoid leaks during Caddy configuration reloads.
-	mu sync.Mutex
+	mu *sync.Mutex
 }
 
 // CaddyModule returns the Caddy module information.
-func (m *IpsetMatcher) CaddyModule() caddy.ModuleInfo {
+func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.matchers.ipset",
 		New: func() caddy.Module { return new(IpsetMatcher) },
@@ -111,6 +111,7 @@ func (m *IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	m.logger = ctx.Logger(m)
+	m.mu = &sync.Mutex{}
 
 	if len(m.Ipsets) == 0 {
 		return fmt.Errorf("at least one ipset name is required")

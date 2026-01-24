@@ -7,10 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-01-24
+
+### Fixed
+- Changed `sync.Mutex` to `*sync.Mutex` to allow value receiver for `CaddyModule()` method
+- Fixed module registration to use zero value `IpsetMatcher{}` instead of nil pointer
+- Downgraded Go version from 1.25 to 1.23 for better compatibility with Caddy module scanner
+
+### Changed
+- Module now registers and builds on macOS, Windows, and other non-Linux platforms
+- Non-Linux platforms return clear error messages when attempting to use the module
+
 ## [0.4.2] - 2026-01-24
 
 ### Changed
-- Added stub for non-linux platforms
+- Added stub implementation for non-Linux platforms to enable module scanning on all platforms
 
 ## [0.4.1] - 2026-01-24
 

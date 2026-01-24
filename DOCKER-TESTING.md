@@ -97,7 +97,7 @@ ipset add test-ipset-v4 192.168.1.100
 pkill caddy
 rm -f ./caddy
 xcaddy build --with github.com/deovero/caddy-ipset=/workspace
-./caddy run & sleep 1
+./caddy run & sleep 2
 echo -e "\n\nShould match:"
 curl http://127.0.0.1:20080
 echo -e "\n\nShould match:"

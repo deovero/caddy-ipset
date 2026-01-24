@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	caddy.RegisterModule((*IpsetMatcher)(nil))
+	caddy.RegisterModule(IpsetMatcher{})
 }
 
 // IpsetMatcher is a stub implementation for non-Linux platforms.
@@ -27,7 +27,7 @@ type IpsetMatcher struct {
 }
 
 // CaddyModule returns the Caddy module information.
-func (m *IpsetMatcher) CaddyModule() caddy.ModuleInfo {
+func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.matchers.ipset",
 		New: func() caddy.Module { return new(IpsetMatcher) },
