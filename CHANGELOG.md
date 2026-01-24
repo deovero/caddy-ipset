@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Using `goid` to log goroutine ID for debugging
+- Using `instance_id` for debugging multiple instances of the module
 
 ## [0.4.4] - 2026-01-24
 

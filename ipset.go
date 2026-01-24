@@ -11,11 +11,11 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
-	"github.com/petermattis/goid"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"go.uber.org/zap"
@@ -33,6 +33,11 @@ const (
 	// IP family string constants
 	ipFamilyIPv4 = "IPv4"
 	ipFamilyIPv6 = "IPv6"
+)
+
+var (
+	// instanceCounter is a global counter for generating unique instance IDs
+	instanceCounter uint64
 )
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
@@ -96,6 +101,10 @@ type IpsetMatcher struct {
 	// Using a pointer to allow value receiver for CaddyModule()
 	handlesMu *sync.Mutex
 
+	// instanceID is a unique identifier for this matcher instance
+	// Used for logging to distinguish between multiple instances
+	instanceID uint64
+
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
 }
@@ -129,6 +138,9 @@ func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - Netlink handle creation fails
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
+	// Generate a unique instance ID for this matcher instance
+	m.instanceID = atomic.AddUint64(&instanceCounter, 1)
+
 	// Get the logger from Caddy's context
 	m.logger = ctx.Logger(m)
 
@@ -145,7 +157,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	}
 	if hasNetAdmin {
 		m.logger.Debug("the process has CAP_NET_ADMIN capability",
-			zap.Int64("goroutine_id", goid.Get()),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 	} else {
 		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
@@ -175,7 +187,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 
 			m.logger.Debug("created new netlink handle for pool",
 				zap.Int("total_handles", len(m.createdHandles)),
-				zap.Int64("goroutine_id", goid.Get()),
+				zap.Uint64("instance_id", m.instanceID),
 			)
 			return handle
 		},
@@ -216,7 +228,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 			zap.String("ipset", ipsetName),
 			zap.String("type", result.TypeName),
 			zap.String("family", familyCodeToString(result.Family)),
-			zap.Int64("goroutine_id", goid.Get()),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 	}
 
@@ -241,7 +253,7 @@ func (m *IpsetMatcher) Cleanup() error {
 	if len(m.createdHandles) > 0 {
 		m.logger.Debug("closed all netlink handles",
 			zap.Int("count", len(m.createdHandles)),
-			zap.Int64("goroutine_id", goid.Get()),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 	}
 
