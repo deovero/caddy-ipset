@@ -327,9 +327,7 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 // Example:
 //
 // ```
-//
 // @blocked ipset blocklist-v4
-//
 // ```
 //
 // Multiple ipset directives in a matcher block:
