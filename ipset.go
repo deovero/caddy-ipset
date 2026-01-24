@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"sync"
 
 	"github.com/caddyserver/caddy/v2"
@@ -125,9 +126,9 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		return fmt.Errorf("failed to get capability flag: %w", err)
 	}
 	if hasNetAdmin {
-		m.logger.Debug("the process has CAP_NET_ADMIN")
+		m.logger.Debug("the process has CAP_NET_ADMIN capability")
 	} else {
-		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep ./caddy")
+		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
 	}
 
 	// Create netlink handles for each ipset

@@ -272,22 +272,18 @@ Error: loading initial config: ... ERROR invalid ipset name 'my ipset': must con
    }
    ```
 
-### "ERROR ipset 'X' cannot be accessed: permission denied"
+### "ipset 'X' does not exist or cannot be accessed: operation not permitted"
 
 **Error message:**
 ```
-Error: loading initial config: ... ERROR ipset 'test-ipset-v4' cannot be accessed: permission denied. Grant CAP_NET_ADMIN capability with: sudo setcap cap_net_admin+ep ./caddy
+Error: loading http app module: provision http: server srv0: setting up route handlers: route 0: loading handler modules: position 0: loading module 'subroute': provision http.handlers.subroute: setting up subroutes: route 6: loading matcher modules: module name 'ipset': provision http.matchers.ipset: ipset 'X' does not exist or cannot be accessed: operation not permitted
 ```
 
-**Cause**: Caddy doesn't have CAP_NET_ADMIN capability to access ipset via netlink.
+**Cause**: Caddy can't access the ipset.
 
-**Solution**: Grant the capability to the Caddy binary:
-
-```bash
-sudo setcap cap_net_admin+ep /path/to/caddy
-```
-
-Then restart Caddy.
+**Solution**: 
+When running Caddy as a Systemd service, make sure it is not too restricted.
+For example `PrivateTmp=true` or other sandboxing options like `ProtectSystem` can cause this issue.
 
 ### "unknown ipset data attribute from kernel" messages
 

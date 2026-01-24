@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Show path to actual caddy binary in error message when CAP_NET_ADMIN is missing instead of just `./caddy`
+
+### Documentation
+- Improved troubleshooting guide in README.md
+
 ## [0.4.3] - 2026-01-24
 
 ### Fixed
