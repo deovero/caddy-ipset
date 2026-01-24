@@ -1321,12 +1321,12 @@ func TestProvision_SavesIPFamily(t *testing.T) {
 			}
 			if m.ipsetFamilies[0] != tc.expectedFamily {
 				t.Errorf("Expected ipsetFamily=%d (%s), got %d (%s)",
-					tc.expectedFamily, familyToString(tc.expectedFamily),
-					m.ipsetFamilies[0], familyToString(m.ipsetFamilies[0]))
+					tc.expectedFamily, familyCodeToString(tc.expectedFamily),
+					m.ipsetFamilies[0], familyCodeToString(m.ipsetFamilies[0]))
 			}
 
 			t.Logf("Ipset %s correctly saved family: %s (%d)",
-				tc.ipsetName, familyToString(m.ipsetFamilies[0]), m.ipsetFamilies[0])
+				tc.ipsetName, familyCodeToString(m.ipsetFamilies[0]), m.ipsetFamilies[0])
 		})
 	}
 }
@@ -1386,14 +1386,14 @@ func TestProvision_SavesIPFamily_MultipleIpsets(t *testing.T) {
 				if m.ipsetFamilies[i] != expectedFamily {
 					t.Errorf("Ipset %s (index %d): expected family=%d (%s), got %d (%s)",
 						tc.ipsets[i], i,
-						expectedFamily, familyToString(expectedFamily),
-						m.ipsetFamilies[i], familyToString(m.ipsetFamilies[i]))
+						expectedFamily, familyCodeToString(expectedFamily),
+						m.ipsetFamilies[i], familyCodeToString(m.ipsetFamilies[i]))
 				}
 			}
 
 			t.Logf("✓ Successfully saved families for %d ipsets:", len(tc.ipsets))
 			for i, ipset := range tc.ipsets {
-				t.Logf("  - %s: %s (%d)", ipset, familyToString(m.ipsetFamilies[i]), m.ipsetFamilies[i])
+				t.Logf("  - %s: %s (%d)", ipset, familyCodeToString(m.ipsetFamilies[i]), m.ipsetFamilies[i])
 			}
 		})
 	}
@@ -1541,21 +1541,22 @@ func TestProvision_TooLongIpsetName(t *testing.T) {
 	}
 }
 
-// TestFamilyToString_UnknownFamily tests the default case in familyToString
+// TestFamilyToString_UnknownFamily tests the default case in familyCodeToString
 func TestFamilyToString_UnknownFamily(t *testing.T) {
 	testCases := []struct {
 		family   uint8
 		expected string
+		name     string
 	}{
-		{unix.NFPROTO_IPV4, "inet"},
-		{unix.NFPROTO_IPV6, "inet6"},
-		{99, "unknown(99)"},   // Unknown family code
-		{255, "unknown(255)"}, // Another unknown family code
+		{unix.NFPROTO_IPV4, "IPv4", "IPv4"},
+		{unix.NFPROTO_IPV6, "IPv6", "IPv6"},
+		{99, "unknown(99)", "unknown_99"},    // Unknown family code
+		{255, "unknown(255)", "unknown_255"}, // Another unknown family code
 	}
 
 	for _, tc := range testCases {
-		t.Run(tc.expected, func(t *testing.T) {
-			result := familyToString(tc.family)
+		t.Run(tc.name, func(t *testing.T) {
+			result := familyCodeToString(tc.family)
 			if result != tc.expected {
 				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
 			}
@@ -1759,5 +1760,181 @@ func TestContextCancellation(t *testing.T) {
 		t.Logf("✓ Context cancellation properly detected: %v", err)
 	} else {
 		t.Logf("Got error (not context.Canceled): %v", err)
+	}
+}
+
+// TestGetIpFamilyString tests the getIpFamilyString helper function
+func TestGetIpFamilyString(t *testing.T) {
+	testCases := []struct {
+		name     string
+		ip       string
+		expected string
+	}{
+		{"IPv4 address", "192.168.1.1", "IPv4"},
+		{"IPv4 loopback", "127.0.0.1", "IPv4"},
+		{"IPv4 broadcast", "255.255.255.255", "IPv4"},
+		{"IPv6 address", "2001:db8::1", "IPv6"},
+		{"IPv6 loopback", "::1", "IPv6"},
+		{"IPv6 full form", "2001:0db8:0000:0000:0000:0000:0000:0001", "IPv6"},
+		{"IPv6 link-local", "fe80::1", "IPv6"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			ip := net.ParseIP(tc.ip)
+			if ip == nil {
+				t.Fatalf("Failed to parse IP: %s", tc.ip)
+			}
+			result := getIpFamilyString(ip)
+			if result != tc.expected {
+				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
+			}
+		})
+	}
+}
+
+// TestProvision_EmptyIpsetInList tests that an empty string in the ipset list is rejected
+func TestProvision_EmptyIpsetInList(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4", ""},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err == nil {
+		t.Error("Expected error for empty ipset name in list")
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "ipset name is required") {
+		t.Errorf("Expected 'ipset name is required' error, got '%s'", err.Error())
+	}
+}
+
+// TestCleanup_MultipleHandles tests that Cleanup properly closes multiple handles
+func TestCleanup_MultipleHandles(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4"},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+
+	// Force creation of multiple handles by getting them from the pool
+	handle1, err := m.getHandle()
+	if err != nil {
+		t.Fatalf("Failed to get first handle: %v", err)
+	}
+	handle2, err := m.getHandle()
+	if err != nil {
+		t.Fatalf("Failed to get second handle: %v", err)
+	}
+
+	// Return handles to pool
+	m.handlePool.Put(handle1)
+	m.handlePool.Put(handle2)
+
+	// Verify we have at least 2 handles created
+	if len(m.createdHandles) < 2 {
+		t.Logf("Expected at least 2 handles, got %d", len(m.createdHandles))
+	}
+
+	// Cleanup should close all handles
+	err = m.Cleanup()
+	if err != nil {
+		t.Errorf("Cleanup returned error: %v", err)
+	}
+
+	// Verify cleanup cleared the fields
+	if m.handlePool != nil {
+		t.Error("Expected handlePool to be nil after cleanup")
+	}
+	if m.createdHandles != nil {
+		t.Error("Expected createdHandles to be nil after cleanup")
+	}
+	if m.Ipsets != nil {
+		t.Error("Expected Ipsets to be nil after cleanup")
+	}
+	if m.ipsetFamilies != nil {
+		t.Error("Expected ipsetFamilies to be nil after cleanup")
+	}
+}
+
+// TestProvision_VeryLongIpsetName tests that very long ipset names are rejected
+func TestProvision_VeryLongIpsetName(t *testing.T) {
+	// Create a name that's longer than IPSET_MAXNAMELEN
+	longName := strings.Repeat("a", 100) // Assuming IPSET_MAXNAMELEN is less than 100
+
+	m := &IpsetMatcher{
+		Ipsets: []string{longName},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err == nil {
+		t.Error("Expected error for very long ipset name")
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "exceeds maximum length") {
+		t.Errorf("Expected 'exceeds maximum length' error, got '%s'", err.Error())
+	}
+}
+
+// TestGetHandle_NilFromPool tests the error path when pool returns nil
+func TestGetHandle_NilFromPool(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets:    []string{"test-ipset-v4"},
+		logger:    zap.NewNop(),
+		handlesMu: &sync.Mutex{},
+	}
+
+	// Create a pool that returns nil
+	m.handlePool = &sync.Pool{
+		New: func() interface{} {
+			return nil
+		},
+	}
+
+	_, err := m.getHandle()
+	if err == nil {
+		t.Error("Expected error when pool returns nil")
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "failed to get netlink handle from pool") {
+		t.Errorf("Expected 'failed to get netlink handle from pool' error, got '%s'", err.Error())
+	}
+}
+
+// TestGetHandle_WrongTypeFromPool tests the error path when pool returns wrong type
+func TestGetHandle_WrongTypeFromPool(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets:    []string{"test-ipset-v4"},
+		logger:    zap.NewNop(),
+		handlesMu: &sync.Mutex{},
+	}
+
+	// Create a pool that returns wrong type
+	m.handlePool = &sync.Pool{
+		New: func() interface{} {
+			return "not a handle"
+		},
+	}
+
+	_, err := m.getHandle()
+	if err == nil {
+		t.Error("Expected error when pool returns wrong type")
+	}
+
+	if err != nil && !strings.Contains(err.Error(), "invalid handle from pool") {
+		t.Errorf("Expected 'invalid handle from pool' error, got '%s'", err.Error())
 	}
 }

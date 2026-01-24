@@ -12,12 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Using a `sync.Pool` of netlink handles for concurrent access instead of a single mutex-protected handle
 - Show path to actual caddy binary in error message when CAP_NET_ADMIN is missing instead of just `./caddy`
-- Removed redundant IP validation since Caddy already provides validated IPs
-- Updated documentation to accurately reflect sync.Pool implementation instead of mutex
+- Consolidated IP family mismatch checking into single conditional
+- Simplified `Cleanup()` method by removing unnecessary outer conditional
 
 ### Fixed
 - Error messages: Improved sanity check error message to show actual counts for easier debugging
 - Context handling: Added support for request context cancellation in `MatchWithError` loop
+
+### Removed
+- Redundant sanity check for ipset count vs family count (impossible to fail)
+- Removed stub implementation for non-Linux platforms
 
 ### Testing
 - Added context cancellation test to verify graceful handling of cancelled requests

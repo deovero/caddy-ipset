@@ -28,6 +28,12 @@ func init() {
 	caddy.RegisterModule(IpsetMatcher{})
 }
 
+const (
+	// IP family string constants
+	ipFamilyIPv4 = "IPv4"
+	ipFamilyIPv6 = "IPv6"
+)
+
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
 //
 // This matcher provides high-performance IP matching by communicating directly
@@ -173,13 +179,9 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	m.ipsetFamilies = make([]uint8, 0, len(m.Ipsets))
 
 	// Borrow a handle from the pool to verify the ipset exists
-	handleInterface := m.handlePool.Get()
-	if handleInterface == nil {
-		return fmt.Errorf("failed to get netlink handle from pool - creation failed")
-	}
-	handle, ok := handleInterface.(*netlink.Handle)
-	if !ok || handle == nil {
-		return fmt.Errorf("invalid handle from pool - expected *netlink.Handle, got %T", handleInterface)
+	handle, err := m.getHandle()
+	if err != nil {
+		return err
 	}
 	// Return the handle to the pool when done
 	defer m.handlePool.Put(handle)
@@ -190,8 +192,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		if ipsetName == "" {
 			return fmt.Errorf("ipset name is required")
 		}
-
-		// Validate ipset name length
+		// Validate ipset name maximum length
 		if len(ipsetName) >= nl.IPSET_MAXNAMELEN {
 			return fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", ipsetName, nl.IPSET_MAXNAMELEN-1)
 		}
@@ -208,13 +209,8 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		m.logger.Info("validated ipset existence",
 			zap.String("ipset", ipsetName),
 			zap.String("type", result.TypeName),
-			zap.String("family", familyToString(result.Family)),
+			zap.String("family", familyCodeToString(result.Family)),
 		)
-	}
-
-	// Sanity check: ensure we have the same number of ipsets and families
-	if len(m.Ipsets) != len(m.ipsetFamilies) {
-		return fmt.Errorf("internal error: ipset count (%d) does not match family count (%d)", len(m.Ipsets), len(m.ipsetFamilies))
 	}
 
 	return nil
@@ -228,22 +224,23 @@ func (m *IpsetMatcher) Cleanup() error {
 	m.handlesMu.Lock()
 	defer m.handlesMu.Unlock()
 
-	if len(m.createdHandles) > 0 {
-		// Close all handles that were created by the pool
-		for _, handle := range m.createdHandles {
-			if handle != nil {
-				handle.Close()
-			}
+	// Close all handles that were created by the pool
+	for _, handle := range m.createdHandles {
+		if handle != nil {
+			handle.Close()
 		}
-
-		m.logger.Debug("closed all netlink handles", zap.Int("count", len(m.createdHandles)))
-
-		// Clear the slices and pool
-		m.Ipsets = nil
-		m.createdHandles = nil
-		m.handlePool = nil
-		m.ipsetFamilies = nil
 	}
+
+	if len(m.createdHandles) > 0 {
+		m.logger.Debug("closed all netlink handles", zap.Int("count", len(m.createdHandles)))
+	}
+
+	// Clear the slices and pool
+	m.Ipsets = nil
+	m.createdHandles = nil
+	m.handlePool = nil
+	m.ipsetFamilies = nil
+
 	return nil
 }
 
@@ -282,26 +279,24 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 		return false, fmt.Errorf("%s is not a string but a %T", caddyhttp.ClientIPVarKey, clientIPvar)
 	}
 
-	// Parse the IP address to determine its family (IPv4 vs IPv6)
+	// Parse the IP address because Caddy passes it as a string
 	ip := net.ParseIP(clientIP)
 	if ip == nil {
 		// Should not happen because Caddy's client IP detection should have already validated it
 		return false, fmt.Errorf("invalid IP address format '%s'", clientIP)
 	}
-	isIPv4 := ip.To4() != nil
+
+	// Get the IP family string for comparison and logging
+	ipFamily := getIpFamilyString(ip)
 
 	// Reuse IPSetEntry to avoid allocation per ipset test
 	entry := &netlink.IPSetEntry{IP: ip}
 
 	// Borrow a handle from the pool for this request
 	// Each concurrent request gets its own handle, enabling true parallelism
-	handleInterface := m.handlePool.Get()
-	if handleInterface == nil {
-		return false, fmt.Errorf("failed to get netlink handle from pool - creation failed")
-	}
-	handle, ok := handleInterface.(*netlink.Handle)
-	if !ok || handle == nil {
-		return false, fmt.Errorf("invalid handle from pool - expected *netlink.Handle, got %T", handleInterface)
+	handle, err := m.getHandle()
+	if err != nil {
+		return false, err
 	}
 	// Return the handle to the pool when done
 	defer m.handlePool.Put(handle)
@@ -319,15 +314,9 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 		}
 
 		// Check if the IP family matches the ipset family (optimization)
-		ipsetFamily := m.ipsetFamilies[i]
-		if ipsetFamily == nl.FAMILY_V4 && !isIPv4 {
-			m.logger.Debug("skipped matching of IPv6 address against IPv4 ipset",
-				zap.String("ip", clientIP),
-				zap.String("ipset", ipsetName))
-			continue
-		}
-		if ipsetFamily == nl.FAMILY_V6 && isIPv4 {
-			m.logger.Debug("skipped matching of IPv4 address against IPv6 ipset",
+		ipsetFamily := familyCodeToString(m.ipsetFamilies[i])
+		if ipFamily != ipsetFamily {
+			m.logger.Debug("skipped matching of "+ipFamily+" address against "+ipsetFamily+" ipset",
 				zap.String("ip", clientIP),
 				zap.String("ipset", ipsetName))
 			continue
@@ -410,22 +399,39 @@ func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	return nil
 }
 
-// familyToString converts the ipset family code to a readable string.
+// getHandle retrieves a netlink handle from the pool and performs type checking.
+// Returns an error if the handle cannot be retrieved or is invalid.
+func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
+	handleInterface := m.handlePool.Get()
+	if handleInterface == nil {
+		return nil, fmt.Errorf("failed to get netlink handle from pool - creation failed")
+	}
+	handle, ok := handleInterface.(*netlink.Handle)
+	if !ok || handle == nil {
+		return nil, fmt.Errorf("invalid handle from pool - expected *netlink.Handle, got %T", handleInterface)
+	}
+	return handle, nil
+}
+
+// familyCodeToString converts the ipset family code to a readable string.
 // Family codes are from NFPROTO_* constants in Linux kernel.
-//
-// Returns:
-//   - "inet" for IPv4 (NFPROTO_IPV4)
-//   - "inet6" for IPv6 (NFPROTO_IPV6)
-//   - "unknown(N)" for unrecognized family codes
-func familyToString(family uint8) string {
+func familyCodeToString(family uint8) string {
 	switch family {
 	case nl.FAMILY_V4:
-		return "inet"
+		return ipFamilyIPv4
 	case nl.FAMILY_V6:
-		return "inet6"
+		return ipFamilyIPv6
 	default:
 		return fmt.Sprintf("unknown(%d)", family)
 	}
+}
+
+// getIpFamilyString returns the family of the given IP address as a string.
+func getIpFamilyString(ip net.IP) string {
+	if ip.To4() != nil {
+		return ipFamilyIPv4
+	}
+	return ipFamilyIPv6
 }
 
 // Interface guards
