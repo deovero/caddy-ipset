@@ -148,6 +148,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 
 	// Initialize the handle pool with a factory function
 	// Each goroutine can borrow a handle, use it, and return it
+	// We don't worry about memory usage too much because these handles are not expensive.
 	m.handlePool = &sync.Pool{
 		New: func() interface{} {
 			handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
@@ -282,14 +283,11 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	}
 
 	// Parse the IP address to determine its family (IPv4 vs IPv6)
-	// Caddy provides the IP as a string, so we need to parse it
 	ip := net.ParseIP(clientIP)
 	if ip == nil {
-		// This should rarely happen as Caddy validates IPs, but handle it gracefully
+		// Should not happen because Caddy's client IP detection should have already validated it
 		return false, fmt.Errorf("invalid IP address format '%s'", clientIP)
 	}
-
-	// Determine IP family for optimization
 	isIPv4 := ip.To4() != nil
 
 	// Reuse IPSetEntry to avoid allocation per ipset test
