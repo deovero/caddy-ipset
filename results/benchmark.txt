@@ -1,0 +1,8 @@
+BenchmarkMatchHit
+BenchmarkMatchHit-12         	  115564	     12092 ns/op	   67000 B/op	      37 allocs/op
+BenchmarkMatchMiss
+BenchmarkMatchMiss-12        	   95251	     13262 ns/op	   67384 B/op	      42 allocs/op
+BenchmarkMatchParallel
+BenchmarkMatchParallel-12    	   72691	     20623 ns/op	   67000 B/op	      37 allocs/op
+BenchmarkFamilySkip
+BenchmarkFamilySkip-12       	 4952812	       244.6 ns/op	     336 B/op	       4 allocs/op

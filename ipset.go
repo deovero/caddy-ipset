@@ -93,11 +93,9 @@ type IpsetMatcher struct {
 	// excess handles are closed.
 	pool chan *netlink.Handle
 
-	// instance is a unique identifier for this Caddy instance
-	instance string
-	// instanceNr is a unique identifier for this matcher instance
+	// instanceID is a unique identifier for this matcher instance
 	// Used for logging to distinguish between multiple instances
-	instanceNr uint64
+	instanceID uint64
 
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
@@ -131,12 +129,7 @@ func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Generate a unique instance ID for this matcher instance
-	m.instanceNr = atomic.AddUint64(&instanceCounter, 1)
-	caddyInstanceID, err := caddy.InstanceID()
-	if err != nil {
-		return fmt.Errorf("failed to get Caddy instance ID: %w", err)
-	}
-	m.instance = fmt.Sprintf("%s.%d", caddyInstanceID.String(), m.instanceNr)
+	m.instanceID = atomic.AddUint64(&instanceCounter, 1)
 
 	// Get the logger from Caddy's context
 	m.logger = ctx.Logger()
@@ -149,7 +142,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	}
 	if hasNetAdmin {
 		m.logger.Debug("the process has CAP_NET_ADMIN capability",
-			zap.String("instance", m.instance),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 	} else {
 		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
@@ -169,7 +162,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	if err != nil {
 		m.logger.Error("failed to create netlink handle for ipset validation",
 			zap.Error(err),
-			zap.String("instance_id", m.instance),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 		return err
 	}
@@ -199,12 +192,12 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 			zap.String("ipset", ipsetName),
 			zap.String("type", result.TypeName),
 			zap.String("family", familyCodeToString(result.Family)),
-			zap.String("instance_id", m.instance),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 	}
 
 	m.logger.Info("ipset matcher provisioned",
-		zap.String("instance_id", m.instance),
+		zap.Uint64("instance_id", m.instanceID),
 	)
 
 	return nil
@@ -230,7 +223,7 @@ func (m *IpsetMatcher) Cleanup() error {
 	if count > 0 {
 		m.logger.Debug("closed pooled netlink handles",
 			zap.Int("count", count),
-			zap.String("instance_id", m.instance),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 	}
 
@@ -239,7 +232,7 @@ func (m *IpsetMatcher) Cleanup() error {
 	m.ipsetFamilies = nil
 
 	m.logger.Info("ipset matcher cleaned up",
-		zap.String("instance_id", m.instance),
+		zap.Uint64("instance_id", m.instanceID),
 	)
 
 	return nil
@@ -305,8 +298,8 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 		select {
 		case <-ctx.Done():
 			return false, fmt.Errorf(
-				"request canceled while matching ipset '%s': %w [instance=%s]",
-				ipsetName, ctx.Err(), m.instance,
+				"request canceled while matching ipset '%s': %w [instance_id=%d]",
+				ipsetName, ctx.Err(), m.instanceID,
 			)
 		default:
 			// Continue processing
@@ -326,8 +319,8 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 
 		if err != nil {
 			return false, fmt.Errorf(
-				"error testing IP '%s' against ipset '%s': %w [instance=%s]",
-				clientIP, ipsetName, err, m.instance,
+				"error testing IP '%s' against ipset '%s': %w [instance_id=%d]",
+				clientIP, ipsetName, err, m.instanceID,
 			)
 		}
 
@@ -406,8 +399,8 @@ func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 	if m.pool == nil {
 		return nil, fmt.Errorf(
-			"netlink handle pool not initialized - matcher not properly provisioned [instance=%s]",
-			m.instance,
+			"netlink handle pool not initialized - matcher not properly provisioned [instance_id=%d]",
+			m.instanceID,
 		)
 	}
 
@@ -419,13 +412,13 @@ func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"failed to create new netlink handle [instance=%s]: %w",
-				m.instance, err,
+				"failed to create new netlink handle [instance_id=%d]: %w",
+				m.instanceID, err,
 			)
 		}
 		m.logger.Debug("created new netlink handle",
 			zap.Int("pool_size", len(m.pool)),
-			zap.String("instance", m.instance),
+			zap.Uint64("instance_id", m.instanceID),
 		)
 		return handle, nil
 	}

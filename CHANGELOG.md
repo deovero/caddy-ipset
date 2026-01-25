@@ -5,18 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Future]
-
-### Testing
-- Added benchmarks for concurrent access and performance optimization
-
-## [Unreleased]
+## [0.4.6]
 
 ### Changed
 - Replaced `sync.Pool` with a leaky bucket pattern for netlink handles. The previous implementation was risky
   for memory/resource leaks and unbound growth.
 - Removed check for empty ipset names in `Provision()` because it's already checked in `UnmarshalCaddyfile()`.
-- Prepended our own instance ID with Caddy's `InstanceID()` to generate unique instance IDs for logging.
+
+### Testing
+- Added benchmarks for concurrent access and performance optimization
 
 ## [0.4.5] - 2026-01-24
 

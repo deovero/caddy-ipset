@@ -6,6 +6,7 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make test              - Build + run docker-test"
+	@echo "  make bench             - Build + run docker-bench"
 	@echo "  make format            - Format all Go files with gofmt"
 	@echo "  make vet               - Run go vet on all files"
 	@echo "  make clean             - Remove Docker containers and images"
@@ -18,6 +19,7 @@ help:
 	@echo "  make coverage-html     - Generate HTML coverage report (opens in browser)"
 	@echo "  make check-ipset       - Check ipset configuration in container"
 	@echo "  make docker-test       - Run tests in Docker container"
+	@echo "  make docker-bench      - Run benchmarks in Docker container"
 
 # Build the Docker image
 build:
@@ -29,8 +31,16 @@ docker-test:
 	@echo "Running tests in Docker container..."
 	docker-compose run --rm caddy-ipset-test /workspace/scripts/test-docker.sh
 
-# Quick test - build and run
+# Test - build and run
 test: build docker-test
+
+# Run benchmarks in Docker container
+docker-bench:
+	@echo "Running benchmarks in Docker container..."
+	docker-compose run --rm caddy-ipset-test /workspace/scripts/benchmark-docker.sh
+
+# Benchmark - build and run
+bench: build docker-bench
 
 # Clean first, then test
 clean-test: clean test
