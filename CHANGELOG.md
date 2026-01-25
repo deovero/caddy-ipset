@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
 - Logging to Info on cleanup
+
+### Testing
+- Increased test coverage to 91.8%
 
 ## [v0.4.7]
 

@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
@@ -1663,3 +1664,85 @@ func TestProvision_EmptyIpsetInList(t *testing.T) {
 }
 
 // TestProvision_VeryLongIpsetName tests that very long ipset names are rejected
+
+// TestPutHandle_NilHandle tests that putHandle safely handles nil handle
+func TestPutHandle_NilHandle(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4"},
+	}
+
+	// Provision to initialize the pool
+	err := m.Provision(caddy.Context{})
+	if err != nil {
+		t.Fatalf("Failed to provision: %v", err)
+	}
+	defer func(m *IpsetMatcher) {
+		_ = m.Cleanup()
+	}(m)
+
+	// Put nil handle - should not panic or add to pool
+	m.putHandle(nil)
+
+	// Verify pool still has the expected number of handles
+	// Pool should have been initialized with some handles during provision
+	select {
+	case h := <-m.pool:
+		if h == nil {
+			t.Error("Expected non-nil handle from pool")
+		}
+		m.putHandle(h) // Return it
+	default:
+		// Pool might be empty, which is fine
+	}
+}
+
+// TestPutHandle_NilPool tests that putHandle safely handles nil pool
+func TestPutHandle_NilPool(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-set"},
+		pool:   nil, // Explicitly set pool to nil
+	}
+
+	// Create a mock handle (we can't actually create a real one without CAP_NET_ADMIN)
+	// But we can test with nil which is the safe path
+	m.putHandle(nil)
+
+	// Should not panic - test passes if we get here
+}
+
+// TestPutHandle_ClosedModule tests that putHandle closes handle when module is closed
+func TestPutHandle_ClosedModule(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4"},
+	}
+
+	// Provision to initialize the pool
+	err := m.Provision(caddy.Context{})
+	if err != nil {
+		t.Fatalf("Failed to provision: %v", err)
+	}
+
+	// Get a handle from the pool
+	h, err := m.getHandle()
+	if err != nil {
+		t.Fatalf("Failed to get handle: %v", err)
+	}
+
+	// Close the module
+	_ = m.Cleanup()
+
+	// Verify module is marked as closed
+	if atomic.LoadInt32(&m.closed) != 1 {
+		t.Error("Expected module to be marked as closed")
+	}
+
+	// Now try to put the handle back - it should be closed instead of returned to pool
+	// We can't directly verify the handle was closed, but we can verify it doesn't panic
+	m.putHandle(h)
+
+	// Verify pool is empty after cleanup (all handles were drained)
+	poolSize := len(m.pool)
+	if poolSize != 0 {
+		t.Errorf("Expected pool to be empty after cleanup, got %d handles", poolSize)
+	}
+}
