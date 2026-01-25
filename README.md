@@ -1,16 +1,16 @@
 # Caddy IPSet Matcher
 
-Caddy HTTP matcher module that matches the client_ip against Linux ipset lists.
+Caddy HTTP matcher module that matches the client_ip against Linux ipset lists using native netlink communication.
+This enables efficient filtering against large, dynamic sets of IPs and CIDR ranges.
 
 ## Features
 
-- **Native kernel communication** - Uses netlink to communicate directly with the Linux kernel
+- High performance with minimal overhead
 - Match HTTP requests against existing Linux ipset lists
 - Uses Caddy's built-in client IP detection (respects `trusted_proxies` configuration)
-- Automatic ipset validation on startup
+- Automatic validation of ipset configuration on startup
 - Comprehensive logging for debugging and monitoring
-- Simple Caddyfile and JSON configuration
-- High performance with minimal overhead
+- Simple Caddyfile configuration
 - Comprehensive unit tests
 
 ## How It Works
@@ -42,7 +42,7 @@ The module requires CAP_NET_ADMIN capability to access ipset via netlink.
 This enables direct netlink access for maximum performance:
 
 ```bash
-sudo setcap cap_net_admin+ep ./caddy
+sudo setcap cap_net_admin+ep /path/to/caddy
 ```
 
 **Advantages:**
@@ -52,11 +52,11 @@ sudo setcap cap_net_admin+ep ./caddy
 
 **Note:** You can verify the capability is set with:
 ```bash
-getcap ./caddy
+getcap /path/to/caddy
 ```
 should display
 ```text
-./caddy cap_net_admin=ep
+/path/to/caddy cap_net_admin=ep
 ```
 
 ## Usage
@@ -123,18 +123,14 @@ sudo ipset list blocklist-v4
 
 This module works with various ipset types:
 - `hash:net` - Network ranges (CIDR notation)
-- `hash:ip` - Individual IP addresses (IPv4 or IPv6)
+- `hash:ip` - Individual IP addresses
 - Other hash types that support IP matching
 
-To restore ipset on boot, add to `/etc/rc.local` or create a systemd service:
+### Supported IPSet Families
 
-## Logging
-
-The module provides detailed logging, examples:
-
-- **Info**: When the module is provisioned
-- **Debug**: When an IP is matched against the ipset, including the result
-- **Error**: When there are issues parsing IPs or accessing ipset
+This module works with both IP families:
+- `inet` - IPv4
+- `inet6` - IPv6
 
 ## Testing
 
@@ -159,75 +155,13 @@ make test
 ```bash
 make help           # Show all available commands
 make test           # Run tests in Docker container
+make bench          # Run benchmarks in Docker container
 make coverage       # Generate coverage.out file
 make coverage-html  # Generate HTML coverage report (opens in browser)
 make shell   # Open interactive shell in container
 make clean          # Clean up Docker resources
 ```
 For the full list of commands, run `make help`.
-
-#### Manual Docker Usage
-
-If you prefer to use Docker directly:
-
-```bash
-# Build the test image
-docker-compose build
-
-# Run tests
-docker-compose run --rm caddy-ipset-test ./test-docker.sh
-
-# Open interactive shell
-docker-compose run --rm caddy-ipset-test /bin/bash
-```
-
-Inside the container, you can run tests manually:
-```bash
-# Run all tests
-go test -v ./...
-
-# Run with coverage
-go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
-
-# Run specific test
-go test -v -run TestProvision ./...
-
-# Check ipset configuration
-ipset list
-```
-
-### Testing the Module
-
-To test if the module is working correctly:
-
-1. Create a test ipset:
-```bash
-sudo ipset create test-ipset-v4 hash:net family inet
-sudo ipset add test-ipset-v4 127.0.0.1
-sudo ipset add test-ipset-v4 192.168.1.100
-sudo ipset create test-ipset-v6 hash:net family inet6
-sudo ipset add test-ipset-v6 ::1
-```
-
-2. Configure Caddy with the matcher:
-Create this [Caddyfile](Caddyfile).
-
-3. Execute Caddy:
-```bash
-./caddy run --config Caddyfile
-```
-
-4. Test with curl:
-```bash
-curl http://127.0.0.1:20080
-# Should return "IPv4 is in the set"
-curl http://[::1]:20080
-# Should return "IPv6 is in the set"
-curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
-# Should return "IPv4 is in the set"
-curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.101'
-# Should return "IP is NOT in the sets"
-```
 
 ## Troubleshooting
 

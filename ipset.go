@@ -40,26 +40,21 @@ var (
 )
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
-//
-// This matcher provides high-performance IP matching by communicating directly
-// with the Linux kernel via netlink, avoiding the overhead of spawning external
-// processes.
+// This enables efficient filtering against large, dynamic sets of IPs and CIDR ranges.
 //
 // Requirements:
-//   - Linux system with ipset kernel module loaded
+//   - Linux system with `ip_set` kernel module loaded
 //   - CAP_NET_ADMIN capability, grant with: `sudo setcap cap_net_admin+ep /path/to/caddy`
 //   - Existing ipset list created via the `ipset` command
 //
-// Supports both IPv4 and IPv6 ipsets and does basic validation during provisioning.
-// In case an IPv4 client_ip is matched against an IPv6 ipset or vice versa, the
-// matcher will return false.
+// Supports both IPv4 and IPv6 ipsets, performing validation during initialization.
+// Protocol mismatches (e.g., checking an IPv4 address against an IPv6 set) return false.
 //
-// When multiple ipsets are configured, the matcher will return true if the
-// client_ip is in any of the ipsets (OR logic).
+// If multiple ipsets are configured, the matcher applies OR logic: it returns true
+// if the IP is found in *any* of the provided sets.
 //
-// The matcher uses a buffered channel as a "leaky bucket" pool of netlink handles.
-// This allows high-performance concurrent processing while preventing resource leaks
-// by capping the number of idle handles.
+// Internally, it utilizes a buffered channel to pool netlink handles. This ensures
+// high-performance concurrency while capping idle resources to prevent leaks.
 //
 // Example Caddyfile usage:
 //

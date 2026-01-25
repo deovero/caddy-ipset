@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+- Improved inline module documentation
+- Improved and simplified README.md
+
 ## [0.4.6]
 
 ### Changed
@@ -37,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed stub implementation for non-Linux platforms
 
 ### Testing
-- Added context cancellation test to verify graceful handling of cancelled requests
+- Added context cancellation test to verify graceful handling of canceled requests
 
 ## [0.4.3] - 2026-01-24
 
@@ -80,13 +86,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **BREAKING**: Removed sudo ipset fallback support - now requires CAP_NET_ADMIN capability
-- Using mutex to make netlink handle thead-safe
+- Using mutex to make netlink handle thread-safe
 - Skip matching if ipset family doesn't match IP family
 - Performance improvement: Reuse netlink handle across requests to avoid socket creation overhead
 - Simplified codebase by removing all sudo-related code and complexity
 - Updated documentation to focus on `sudo setcap cap_net_admin+ep ./caddy` approach
-- Docker testing now uses setcap to grant CAP_NET_ADMIN to test binary running as non-root user
-- Replaced sudo package with libcap2-bin in Docker image
+- Docker testing now uses `setcap` to grant CAP_NET_ADMIN to test binary running as non-root user
+- Replaced sudo package with `libcap2-bin` in Docker image
 - Renamed test ipsets to use `test-ipset-v4` and `test-ipset-v6` naming convention
 - No longer validating name of ipset since almost all characters are allowed
 - Improved logging
@@ -101,8 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 - Coverage increased to 94.5%
-- Coverage is now written to coverage.out
-- Manual testing in Docker using xcaddy
+- Coverage is now written to `coverage.out`
+- Manual testing in Docker using `xcaddy`
 - Improved Makefile
 
 ### Documentation
@@ -170,7 +176,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Infrastructure
 - GitHub Actions CI workflow
-- golangci-lint configuration
+- `golangci-lint` configuration
 
 ### Fixed
 - Improved warning messages for better user experience
