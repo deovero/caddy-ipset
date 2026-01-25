@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/caddyserver/caddy/v2"
@@ -33,24 +32,6 @@ func TestCaddyModule(t *testing.T) {
 	newModule := info.New()
 	if _, ok := newModule.(*IpsetMatcher); !ok {
 		t.Error("Expected New to return *IpsetMatcher")
-	}
-}
-
-func TestProvision_EmptyIpsetName(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err == nil {
-		t.Error("Expected error for empty ipset name")
-	}
-
-	if err != nil && err.Error() != "at least one ipset name is required" {
-		t.Errorf("Expected 'at least one ipset name is required' error, got '%s'", err.Error())
 	}
 }
 
@@ -565,9 +546,9 @@ func TestProvision_MultipleIpsets(t *testing.T) {
 				if m.logger == nil {
 					t.Error("Expected logger to be set")
 				}
-				// Verify at least one handle was created (handle pool creates handles on-demand)
-				if len(m.createdHandles) < 1 {
-					t.Errorf("Expected at least 1 handle, got %d", len(m.createdHandles))
+				// Verify pool was initialized
+				if m.pool == nil {
+					t.Error("Expected pool to be initialized")
 				}
 				// Verify all ipset families were recorded
 				if len(m.ipsetFamilies) != len(tc.ipsets) {
@@ -1607,10 +1588,9 @@ func TestMatchWithError_ClientIPVarKeyNonString(t *testing.T) {
 // TestMatchWithError_UninitializedHandle tests the case where the handle is not initialized
 func TestMatchWithError_UninitializedHandle(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipsets:     []string{"test-ipset-v4"},
-		logger:     zap.NewNop(),
-		handlePool: nil,           // Explicitly set to nil to simulate uninitialized state
-		handlesMu:  &sync.Mutex{}, // Must initialize mutex to avoid nil pointer dereference
+		Ipsets: []string{"test-ipset-v4"},
+		logger: zap.NewNop(),
+		pool:   nil, // Explicitly set to nil to simulate uninitialized state
 	}
 
 	req := httptest.NewRequest("GET", "http://example.com", nil)
@@ -1675,14 +1655,14 @@ ipset test-ipset-v6`
 	}(matcher)
 
 	// Verify provisioning
-	// Handle pool creates handles on-demand, so we expect at least 1 handle
-	if len(matcher.createdHandles) < 1 {
-		t.Errorf("Expected at least 1 handle, got %d", len(matcher.createdHandles))
+	// Verify pool was initialized
+	if matcher.pool == nil {
+		t.Error("Expected pool to be initialized")
 	}
 	if len(matcher.ipsetFamilies) != len(expectedIpsets) {
 		t.Errorf("Expected %d families, got %d", len(expectedIpsets), len(matcher.ipsetFamilies))
 	}
-	t.Logf("✓ Provisioned %d ipsets with handles and families", len(matcher.createdHandles))
+	t.Logf("✓ Provisioned %d ipsets with families", len(matcher.ipsetFamilies))
 
 	// Test 3: Test matching with various IPs
 	testCases := []struct {
@@ -1838,12 +1818,13 @@ func TestCleanup_MultipleHandles(t *testing.T) {
 	}
 
 	// Return handles to pool
-	m.handlePool.Put(handle1)
-	m.handlePool.Put(handle2)
+	m.putHandle(handle1)
+	m.putHandle(handle2)
 
-	// Verify we have at least 2 handles created
-	if len(m.createdHandles) < 2 {
-		t.Logf("Expected at least 2 handles, got %d", len(m.createdHandles))
+	// Verify pool has handles
+	poolLen := len(m.pool)
+	if poolLen < 2 {
+		t.Logf("Expected at least 2 handles in pool, got %d", poolLen)
 	}
 
 	// Cleanup should close all handles
@@ -1853,12 +1834,6 @@ func TestCleanup_MultipleHandles(t *testing.T) {
 	}
 
 	// Verify cleanup cleared the fields
-	if m.handlePool != nil {
-		t.Error("Expected handlePool to be nil after cleanup")
-	}
-	if m.createdHandles != nil {
-		t.Error("Expected createdHandles to be nil after cleanup")
-	}
 	if m.Ipsets != nil {
 		t.Error("Expected Ipsets to be nil after cleanup")
 	}
@@ -1889,52 +1864,20 @@ func TestProvision_VeryLongIpsetName(t *testing.T) {
 	}
 }
 
-// TestGetHandle_NilFromPool tests the error path when pool returns nil
-func TestGetHandle_NilFromPool(t *testing.T) {
+// TestGetHandle_UninitializedPool tests the error path when pool is not initialized
+func TestGetHandle_UninitializedPool(t *testing.T) {
 	m := &IpsetMatcher{
-		Ipsets:    []string{"test-ipset-v4"},
-		logger:    zap.NewNop(),
-		handlesMu: &sync.Mutex{},
-	}
-
-	// Create a pool that returns nil
-	m.handlePool = &sync.Pool{
-		New: func() interface{} {
-			return nil
-		},
+		Ipsets: []string{"test-ipset-v4"},
+		logger: zap.NewNop(),
+		pool:   nil, // Uninitialized pool
 	}
 
 	_, err := m.getHandle()
 	if err == nil {
-		t.Error("Expected error when pool returns nil")
+		t.Error("Expected error when pool is not initialized")
 	}
 
-	if err != nil && !strings.Contains(err.Error(), "failed to get netlink handle from pool") {
-		t.Errorf("Expected 'failed to get netlink handle from pool' error, got '%s'", err.Error())
-	}
-}
-
-// TestGetHandle_WrongTypeFromPool tests the error path when pool returns wrong type
-func TestGetHandle_WrongTypeFromPool(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets:    []string{"test-ipset-v4"},
-		logger:    zap.NewNop(),
-		handlesMu: &sync.Mutex{},
-	}
-
-	// Create a pool that returns wrong type
-	m.handlePool = &sync.Pool{
-		New: func() interface{} {
-			return "not a handle"
-		},
-	}
-
-	_, err := m.getHandle()
-	if err == nil {
-		t.Error("Expected error when pool returns wrong type")
-	}
-
-	if err != nil && !strings.Contains(err.Error(), "invalid handle from pool") {
-		t.Errorf("Expected 'invalid handle from pool' error, got '%s'", err.Error())
+	if err != nil && !strings.Contains(err.Error(), "not initialized") && !strings.Contains(err.Error(), "not properly provisioned") {
+		t.Errorf("Expected error about uninitialized pool, got '%s'", err.Error())
 	}
 }

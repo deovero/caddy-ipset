@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Replaced `sync.Pool` with a leaky bucket pattern for netlink handles. The previous implementation was risky
+  for memory/resource leaks and unbound growth.
+- Removed check for empty ipset names in `Provision()` because it's already checked in `UnmarshalCaddyfile()`.
+
 ## [0.4.5] - 2026-01-24
 
 ### Changed
