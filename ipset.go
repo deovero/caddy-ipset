@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync/atomic"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
@@ -31,6 +32,11 @@ const (
 	// IP family string constants
 	ipFamilyIPv4 = "IPv4"
 	ipFamilyIPv6 = "IPv6"
+)
+
+var (
+	// instanceCounter is a global counter for generating unique instance IDs
+	instanceCounter uint64
 )
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
@@ -89,6 +95,9 @@ type IpsetMatcher struct {
 
 	// instance is a unique identifier for this Caddy instance
 	instance string
+	// instanceNr is a unique identifier for this matcher instance
+	// Used for logging to distinguish between multiple instances
+	instanceNr uint64
 
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
@@ -122,14 +131,15 @@ func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Generate a unique instance ID for this matcher instance
+	m.instanceNr = atomic.AddUint64(&instanceCounter, 1)
 	caddyInstanceID, err := caddy.InstanceID()
 	if err != nil {
 		return fmt.Errorf("failed to get Caddy instance ID: %w", err)
 	}
-	m.instance = caddyInstanceID.String()
+	m.instance = fmt.Sprintf("%s.%d", caddyInstanceID.String(), m.instanceNr)
 
 	// Get the logger from Caddy's context
-	m.logger = ctx.Logger(m)
+	m.logger = ctx.Logger()
 
 	// Check if the Effective capabilities set contains CAP_NET_ADMIN
 	capSet := cap.GetProc()
