@@ -15,11 +15,19 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/syndtr/gocapability/capability" // does not require CGo for libcap
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
-	"kernel.org/pub/linux/libs/security/libcap/cap"
+)
+
+// Interface guards
+var (
+	_ caddy.Provisioner                 = (*IpsetMatcher)(nil)
+	_ caddy.CleanerUpper                = (*IpsetMatcher)(nil)
+	_ caddyfile.Unmarshaler             = (*IpsetMatcher)(nil)
+	_ caddyhttp.RequestMatcherWithError = (*IpsetMatcher)(nil)
 )
 
 func init() {
@@ -30,8 +38,9 @@ func init() {
 
 const (
 	// IP family string constants
-	ipFamilyIPv4 = "IPv4"
-	ipFamilyIPv6 = "IPv6"
+	ipFamilyUnknown = 0
+	ipFamilyIPv4    = 4
+	ipFamilyIPv6    = 6
 )
 
 var (
@@ -79,8 +88,8 @@ type IpsetMatcher struct {
 	// If the client IP is in ANY of these ipsets, the matcher returns true
 	Ipsets []string `json:"ipsets,omitempty"`
 
-	// ipsetFamilies stores the IP family (IPv4 or IPv6) for each ipset
-	ipsetFamilies []uint8
+	// ipsetFamilyVersions stores the IP family (IPv4, IPv6, unknown) for each ipset
+	ipsetFamilyVersions []uint8
 
 	// pool acts as a leaky bucket for netlink handles.
 	// It holds a fixed number of reusable handles. If the pool is empty,
@@ -91,6 +100,9 @@ type IpsetMatcher struct {
 	// instanceID is a unique identifier for this matcher instance
 	// Used for logging to distinguish between multiple instances
 	instanceID uint64
+
+	// closed is an atomic flag to indicate if the module is being cleaned up
+	closed int32
 
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
@@ -130,11 +142,15 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	m.logger = ctx.Logger()
 
 	// Check if the Effective capabilities set contains CAP_NET_ADMIN
-	capSet := cap.GetProc()
-	hasNetAdmin, err := capSet.GetFlag(cap.Effective, cap.NET_ADMIN)
+	caps, err := capability.NewPid2(0)
 	if err != nil {
-		return fmt.Errorf("failed to get capability flag: %w", err)
+		return fmt.Errorf("failed to get process capabilities: %w", err)
 	}
+	err = caps.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load process capabilities: %w", err)
+	}
+	hasNetAdmin := caps.Get(capability.EFFECTIVE, capability.CAP_NET_ADMIN)
 	if hasNetAdmin {
 		m.logger.Debug("the process has CAP_NET_ADMIN capability",
 			zap.Uint64("instance_id", m.instanceID),
@@ -148,8 +164,8 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// constantly creating/destroying sockets, while keeping memory usage low.
 	m.pool = make(chan *netlink.Handle, 128)
 
-	// Pre-allocate ipsetFamilies slice with known capacity
-	m.ipsetFamilies = make([]uint8, 0, len(m.Ipsets))
+	// Pre-allocate ipsetFamilyVersions slice with known length
+	m.ipsetFamilyVersions = make([]uint8, len(m.Ipsets))
 
 	// Create a temporary handle just for ipset access validation.
 	// We do not use the pool here to ensure deterministic startup behavior.
@@ -164,7 +180,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	defer handle.Close()
 
 	// Validate each ipset and store its family information
-	for _, ipsetName := range m.Ipsets {
+	for i, ipsetName := range m.Ipsets {
 		// Validate ipset name is not empty
 		if ipsetName == "" {
 			return fmt.Errorf("ipset name is required")
@@ -181,12 +197,12 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		}
 
 		// Store the family information for this ipset
-		m.ipsetFamilies = append(m.ipsetFamilies, result.Family)
+		m.ipsetFamilyVersions[i] = nfprotoFamilyVersion(result.Family)
 
 		m.logger.Info("validated ipset existence",
 			zap.String("ipset", ipsetName),
 			zap.String("type", result.TypeName),
-			zap.String("family", familyCodeToString(result.Family)),
+			zap.Uint8("family", m.ipsetFamilyVersions[i]),
 			zap.Uint64("instance_id", m.instanceID),
 		)
 	}
@@ -202,31 +218,28 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 // This method is called by Caddy during graceful shutdown or module reload.
 // It ensures proper cleanup of system resources.
 func (m *IpsetMatcher) Cleanup() error {
-	// Close the channel to signal no new items (mostly for correctness,
-	// though concurrent writes during cleanup shouldn't happen in Caddy).
-	close(m.pool)
-
+	// Not closing the channel because during reload some handles may still be in use.
+	// Only closing returned handles for the same reason.
 	count := 0
-	// Drain the pool and close every handle inside
-	for handle := range m.pool {
-		if handle != nil {
-			handle.Close()
-			count++
+	// Mark as closed first to prevent new requests from starting new handles
+	atomic.StoreInt32(&m.closed, 1)
+
+drainLoop:
+	for {
+		select {
+		case handle := <-m.pool:
+			if handle != nil {
+				handle.Close()
+				count++
+			}
+		default:
+			// Pool is empty
+			break drainLoop
 		}
 	}
 
-	if count > 0 {
-		m.logger.Debug("closed pooled netlink handles",
-			zap.Int("count", count),
-			zap.Uint64("instance_id", m.instanceID),
-		)
-	}
-
-	// Clear the slices
-	m.Ipsets = nil
-	m.ipsetFamilies = nil
-
-	m.logger.Info("ipset matcher cleaned up",
+	m.logger.Debug("ipset matcher cleaned up, closed pooled netlink handles",
+		zap.Int("count", count),
 		zap.Uint64("instance_id", m.instanceID),
 	)
 
@@ -239,15 +252,16 @@ func (m *IpsetMatcher) Cleanup() error {
 //
 // The matching process:
 //   - Extracts the client_ip from the request
-//   - Validates the IP address format
-//   - Checks each configured ipset in order
+//   - Checks each configured ipsets in order
 //   - For each ipset, checks if the IP family matches (optimization)
 //   - Performs the ipset lookup via netlink
 //   - Returns true if found in ANY ipset (OR logic)
 //
 // Returns false + error if:
-//   - No netlink handles are initialized
-//   - The client IP cannot be determined or parsed
+//   - The request context is canceled
+//   - The client IP is not found in the request context
+//   - There is a problem with the netlink handle
+//   - The client IP cannot be parsed
 //   - An error occurs during ipset lookup
 //
 // Returns false if:
@@ -255,9 +269,18 @@ func (m *IpsetMatcher) Cleanup() error {
 //
 // Returns true if:
 //   - the client's IP address is found in at least one configured ipset.
+//
+// We don't want to silently ignore errors here because this has security implications.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
+	// Check if debug logging is enabled, caching here because it could change during module lifetime
+	debugEnabled := m.logger.Core().Enabled(zap.DebugLevel)
+
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
 	clientIPvar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
+	if clientIPvar == nil {
+		// Maybe this can happen if the users trusted_proxies configuration is wrong?
+		return false, fmt.Errorf("%s not found in request context", caddyhttp.ClientIPVarKey)
+	}
 	clientIP, ok := clientIPvar.(string)
 	if !ok {
 		// Should not happen because Caddy always sets this to a string
@@ -272,7 +295,7 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	}
 
 	// Get the IP family string for comparison and logging
-	ipFamily := getIpFamilyString(ip)
+	ipFamily := ipFamilyVersion(ip)
 
 	// Reuse IPSetEntry to avoid allocation per ipset test
 	entry := &netlink.IPSetEntry{IP: ip}
@@ -288,6 +311,7 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Get request context for cancellation support
 	ctx := req.Context()
 
+ipsetLoop:
 	for i, ipsetName := range m.Ipsets {
 		// Check for context cancellation (e.g., client disconnected)
 		select {
@@ -301,17 +325,21 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 		}
 
 		// Check if the IP family matches the ipset family (optimization)
-		ipsetFamily := familyCodeToString(m.ipsetFamilies[i])
-		if ipFamily != ipsetFamily {
-			m.logger.Debug("skipped matching of "+ipFamily+" address against "+ipsetFamily+" ipset",
-				zap.String("ip", clientIP),
-				zap.String("ipset", ipsetName))
-			continue
+		ipsetFamily := m.ipsetFamilyVersions[i]
+		if ipsetFamily != ipFamilyUnknown && ipFamily != ipsetFamily {
+			if debugEnabled {
+				// This is a hot path so we prevent string allocation if debug is not enabled
+				m.logger.Debug(
+					fmt.Sprintf("skipped matching of IPv%d address against IPv%d ipset", ipFamily, ipsetFamily),
+					zap.String("ip", clientIP),
+					zap.String("ipset", ipsetName),
+				)
+			}
+			continue ipsetLoop
 		}
 
-		// Test if the IP is in this ipset (reusing the entry allocation)
+		// Actually test if the IP is in this ipset (reusing the entry allocation)
 		found, err := handle.IpsetTest(ipsetName, entry)
-
 		if err != nil {
 			return false, fmt.Errorf(
 				"error testing IP '%s' against ipset '%s': %w [instance_id=%d]",
@@ -321,25 +349,34 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 
 		// OR logic: if found in ANY ipset, return true immediately
 		if found {
-			m.logger.Debug("IP matched in ipset",
-				zap.String("ip", clientIP),
-				zap.String("ipset", ipsetName),
-			)
+			if debugEnabled {
+				// This is a hot path so we prevent string allocation if debug is not enabled
+				m.logger.Debug("IP matched in ipset",
+					zap.String("ip", clientIP),
+					zap.String("ipset", ipsetName),
+				)
+			}
 			return true, nil
 		}
 
 		// Not found in this ipset, continue to check the next one
-		m.logger.Debug("IP not in ipset, checking next",
-			zap.String("ip", clientIP),
-			zap.String("ipset", ipsetName),
-		)
+		if debugEnabled {
+			// This is a hot path so we prevent string allocation if debug is not enabled
+			m.logger.Debug("IP not in ipset, checking next",
+				zap.String("ip", clientIP),
+				zap.String("ipset", ipsetName),
+			)
+		}
 	}
 
 	// Not found in any ipset
-	m.logger.Debug("IP not found in any ipset",
-		zap.String("ip", clientIP),
-		zap.Int("ipsets_checked", len(m.Ipsets)),
-	)
+	if debugEnabled {
+		// This is a hot path so we prevent string allocation if debug is not enabled
+		m.logger.Debug("IP not found in any ipset",
+			zap.String("ip", clientIP),
+			zap.Int("ipsets_checked", len(m.Ipsets)),
+		)
+	}
 	return false, nil
 }
 
@@ -425,6 +462,13 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	if h == nil || m.pool == nil {
 		return
 	}
+
+	// If module is closed, destroy the handle immediately
+	if atomic.LoadInt32(&m.closed) == 1 {
+		h.Close()
+		return
+	}
+
 	select {
 	case m.pool <- h:
 		// Successfully returned to pool
@@ -434,31 +478,23 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	}
 }
 
-// familyCodeToString converts the ipset family code to a readable string.
+// nfprotoFamilyVersion converts the ipset family code to a human-readable version.
 // Family codes are from NFPROTO_* constants in Linux kernel.
-func familyCodeToString(family uint8) string {
+func nfprotoFamilyVersion(family uint8) uint8 {
 	switch family {
 	case nl.FAMILY_V4:
 		return ipFamilyIPv4
 	case nl.FAMILY_V6:
 		return ipFamilyIPv6
 	default:
-		return fmt.Sprintf("unknown(%d)", family)
+		return ipFamilyUnknown
 	}
 }
 
-// getIpFamilyString returns the family of the given IP address as a string.
-func getIpFamilyString(ip net.IP) string {
+// ipFamilyVersion returns the family of the given IP address as a human-readable version.
+func ipFamilyVersion(ip net.IP) uint8 {
 	if ip.To4() != nil {
 		return ipFamilyIPv4
 	}
 	return ipFamilyIPv6
 }
-
-// Interface guards
-var (
-	_ caddy.Provisioner                 = (*IpsetMatcher)(nil)
-	_ caddy.CleanerUpper                = (*IpsetMatcher)(nil)
-	_ caddyfile.Unmarshaler             = (*IpsetMatcher)(nil)
-	_ caddyhttp.RequestMatcherWithError = (*IpsetMatcher)(nil)
-)

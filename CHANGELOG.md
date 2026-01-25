@@ -7,11 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.7]
+
+### Fixed
+- If an ipset is of an unknown family, try to match it.
+
+### Changed
+- Made `Cleanup()` safe when `MatchWithError()` is called concurrently.
+- Performance optimization: Skip debug string allocations in hot paths when debug is not enabled.
+- Switched to `github.com/syndtr/gocapability/capability` for capability checks to prevent CGo requirements.
+- Made comparing ipset families against IP families a bit more efficient.
+- Moved interface guards to top of file for better readability.
+
 ### Documentation
 - Improved inline module documentation
 - Improved and simplified README.md
 
-## [0.4.6]
+## [v0.4.6]
 
 ### Changed
 - Replaced `sync.Pool` with a leaky bucket pattern for netlink handles. The previous implementation was risky
@@ -21,12 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Testing
 - Added benchmarks for concurrent access and performance optimization
 
-## [0.4.5] - 2026-01-24
+## [v0.4.5] - 2026-01-24
 
 ### Changed
 - Using `instance_id` for debugging multiple instances of the module
 
-## [0.4.4] - 2026-01-24
+## [v0.4.4] - 2026-01-24
 
 ### Changed
 - Using a `sync.Pool` of netlink handles for concurrent access instead of a single mutex-protected handle
@@ -45,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Testing
 - Added context cancellation test to verify graceful handling of canceled requests
 
-## [0.4.3] - 2026-01-24
+## [v0.4.3] - 2026-01-24
 
 ### Fixed
 - Changed `sync.Mutex` to `*sync.Mutex` to allow value receiver for `CaddyModule()` method
@@ -56,17 +68,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Module now registers and builds on macOS, Windows, and other non-Linux platforms
 - Non-Linux platforms return clear error messages when attempting to use the module
 
-## [0.4.2] - 2026-01-24
+## [v0.4.2] - 2026-01-24
 
 ### Changed
 - Added stub implementation for non-Linux platforms to enable module scanning on all platforms
 
-## [0.4.1] - 2026-01-24
+## [v0.4.1] - 2026-01-24
 
 ### Documentation
 - Improved inline module documentation
 
-## [0.4.0] - 2026-01-24
+## [v0.4.0] - 2026-01-24
 
 ### Changed
 - Support for passing multiple ipsets to one matcher
@@ -77,12 +89,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improved module description
 - Examples with both IPv4 and IPv6 matching in one matcher
 
-## [0.3.1] - 2026-01-23
+## [v0.3.1] - 2026-01-23
 
 ### Documentation
 - Added 'Linux-specific' to module description
 
-## [0.3.0] - 2026-01-23
+## [v0.3.0] - 2026-01-23
 
 ### Changed
 - **BREAKING**: Removed sudo ipset fallback support - now requires CAP_NET_ADMIN capability
@@ -118,7 +130,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added X-Forwarded-For example to README.md
 - Cleaned up README
 
-## [0.2.0] - 2026-01-23
+## [v0.2.0] - 2026-01-23
 
 ### Added
 - Full IPv6 support for ipset matching
@@ -147,7 +159,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Makefile with convenient commands for Docker-based testing
 - `.dockerignore` for optimized Docker builds
 
-## [0.1.0] - 2026-01-22
+## [v0.1.0] - 2026-01-22
 
 ### Added
 - Initial release of Caddy IPSet Matcher module
@@ -184,6 +196,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go version compatibility (Go 1.25)
 - Code formatting and linting issues
 
-[0.3.0]: https://github.com/deovero/caddy-ipset/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/deovero/caddy-ipset/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/deovero/caddy-ipset/releases/tag/v0.1.0
+[v0.3.0]: https://github.com/deovero/caddy-ipset/compare/v0.2.0...v0.3.0
+[v0.2.0]: https://github.com/deovero/caddy-ipset/compare/v0.1.0...v0.2.0
+[v0.1.0]: https://github.com/deovero/caddy-ipset/releases/tag/v0.1.0

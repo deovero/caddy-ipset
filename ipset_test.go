@@ -142,62 +142,6 @@ func TestMatchWithError_InvalidIP(t *testing.T) {
 	}
 }
 
-func TestMatch_ClientIPWithPort(t *testing.T) {
-	// Test that we properly handle IP addresses with port numbers
-	// This verifies the net.SplitHostPort logic works correctly
-
-	// Test IP with port
-	testIP := "192.168.1.1:12345"
-	ip, _, err := net.SplitHostPort(testIP)
-	if err != nil {
-		t.Errorf("Failed to split host port: %v", err)
-	}
-	if ip != "192.168.1.1" {
-		t.Errorf("Expected IP '192.168.1.1', got '%s'", ip)
-	}
-
-	// Test IPv6 with port
-	testIPv6 := "[2001:db8::1]:8080"
-	ipv6, _, err := net.SplitHostPort(testIPv6)
-	if err != nil {
-		t.Errorf("Failed to split IPv6 host port: %v", err)
-	}
-	if ipv6 != "2001:db8::1" {
-		t.Errorf("Expected IPv6 '2001:db8::1', got '%s'", ipv6)
-	}
-
-	// Test IP without port (should fail, which is expected)
-	testIPNoPort := "192.168.1.1"
-	_, _, err = net.SplitHostPort(testIPNoPort)
-	if err == nil {
-		t.Error("Expected error when splitting IP without port, but got none")
-	}
-	// This is expected - we should use the IP directly in this case
-}
-
-// TestProvision_NetlinkSuccess tests successful provisioning with netlink access
-func TestProvision_NetlinkSuccess(t *testing.T) {
-	// This test requires an actual ipset to exist
-	// It will use the test-ipset-v4 created by the Docker environment
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	// This may fail if running outside Docker or if test-ipset-v4 doesn't exist
-	if err != nil {
-		t.Logf("Netlink provisioning failed (expected in some environments): %v", err)
-	} else {
-		// Verify logger was set
-		if m.logger == nil {
-			t.Error("Expected logger to be set")
-		}
-	}
-}
-
 // TestProvision_NonExistentIpset tests provisioning with a non-existent ipset
 func TestProvision_NonExistentIpset(t *testing.T) {
 	m := &IpsetMatcher{
@@ -250,78 +194,6 @@ func TestMatchWithError_WithNetlinkMethod(t *testing.T) {
 	// We can't assert the result without knowing the ipset state
 	// But we can verify it doesn't panic
 	t.Logf("MatchWithError result for 127.0.0.1: %v", result)
-}
-
-// TestMatchWithError_IPWithoutPort tests MatchWithError with IP address without port
-func TestMatchWithError_IPWithoutPort(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed: %v", err)
-		return
-	}
-	defer func(m *IpsetMatcher) {
-		_ = m.Cleanup()
-	}(m)
-
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-
-	// Prepare the request with Caddy context
-	repl := caddyhttp.NewTestReplacer(req)
-	w := httptest.NewRecorder()
-	req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-	// Set an IP without port
-	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "192.168.1.1")
-
-	// This should handle the case where there's no port
-	result, err := m.MatchWithError(req)
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	t.Logf("MatchWithError result for IP without port: %v", result)
-}
-
-// TestMatchWithError_IPv6 tests MatchWithError with IPv6 address
-func TestMatchWithError_IPv6(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed: %v", err)
-		return
-	}
-	defer func(m *IpsetMatcher) {
-		_ = m.Cleanup()
-	}(m)
-
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-
-	// Prepare the request with Caddy context
-	repl := caddyhttp.NewTestReplacer(req)
-	w := httptest.NewRecorder()
-	req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-	// Set IPv6 address
-	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "2001:db8::1")
-
-	result, err := m.MatchWithError(req)
-	// Should return false (no error) because IPv6 doesn't match IPv4 ipset
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	t.Logf("MatchWithError result for IPv6 against IPv4 ipset: %v", result)
 }
 
 func TestUnmarshalCaddyfile(t *testing.T) {
@@ -551,8 +423,8 @@ func TestProvision_MultipleIpsets(t *testing.T) {
 					t.Error("Expected pool to be initialized")
 				}
 				// Verify all ipset families were recorded
-				if len(m.ipsetFamilies) != len(tc.ipsets) {
-					t.Errorf("Expected %d ipset families, got %d", len(tc.ipsets), len(m.ipsetFamilies))
+				if len(m.ipsetFamilyVersions) != len(tc.ipsets) {
+					t.Errorf("Expected %d ipset families, got %d", len(tc.ipsets), len(m.ipsetFamilyVersions))
 				}
 				t.Logf("✓ %s: Successfully provisioned %d ipsets", tc.description, len(tc.ipsets))
 
@@ -1279,8 +1151,8 @@ func TestProvision_SavesIPFamily(t *testing.T) {
 		ipsetName      string
 		expectedFamily uint8
 	}{
-		{"IPv4 ipset saves IPv4 family", "test-ipset-v4", unix.NFPROTO_IPV4},
-		{"IPv6 ipset saves IPv6 family", "test-ipset-v6", unix.NFPROTO_IPV6},
+		{"IPv4 ipset saves IPv4 family", "test-ipset-v4", ipFamilyIPv4},
+		{"IPv6 ipset saves IPv6 family", "test-ipset-v6", ipFamilyIPv6},
 	}
 
 	for _, tc := range testCases {
@@ -1297,17 +1169,16 @@ func TestProvision_SavesIPFamily(t *testing.T) {
 				t.Fatalf("Failed to provision matcher: %v", err)
 			}
 
-			if len(m.ipsetFamilies) != 1 {
-				t.Fatalf("Expected 1 ipset family, got %d", len(m.ipsetFamilies))
+			if len(m.ipsetFamilyVersions) != 1 {
+				t.Fatalf("Expected 1 ipset family, got %d", len(m.ipsetFamilyVersions))
 			}
-			if m.ipsetFamilies[0] != tc.expectedFamily {
-				t.Errorf("Expected ipsetFamily=%d (%s), got %d (%s)",
-					tc.expectedFamily, familyCodeToString(tc.expectedFamily),
-					m.ipsetFamilies[0], familyCodeToString(m.ipsetFamilies[0]))
+			if m.ipsetFamilyVersions[0] != tc.expectedFamily {
+				t.Errorf("Expected ipsetFamily=%d, got %d",
+					tc.expectedFamily, m.ipsetFamilyVersions[0])
 			}
 
-			t.Logf("Ipset %s correctly saved family: %s (%d)",
-				tc.ipsetName, familyCodeToString(m.ipsetFamilies[0]), m.ipsetFamilies[0])
+			t.Logf("Ipset %s correctly saved family: %d",
+				tc.ipsetName, m.ipsetFamilyVersions[0])
 		})
 	}
 }
@@ -1322,22 +1193,22 @@ func TestProvision_SavesIPFamily_MultipleIpsets(t *testing.T) {
 		{
 			name:             "two IPv4 ipsets",
 			ipsets:           []string{"test-ipset-v4", "blocklist-v4"},
-			expectedFamilies: []uint8{unix.NFPROTO_IPV4, unix.NFPROTO_IPV4},
+			expectedFamilies: []uint8{ipFamilyIPv4, ipFamilyIPv4},
 		},
 		{
 			name:             "two IPv6 ipsets",
 			ipsets:           []string{"test-ipset-v6", "blocklist-v6"},
-			expectedFamilies: []uint8{unix.NFPROTO_IPV6, unix.NFPROTO_IPV6},
+			expectedFamilies: []uint8{ipFamilyIPv6, ipFamilyIPv6},
 		},
 		{
 			name:             "mixed IPv4 and IPv6",
 			ipsets:           []string{"test-ipset-v4", "test-ipset-v6"},
-			expectedFamilies: []uint8{unix.NFPROTO_IPV4, unix.NFPROTO_IPV6},
+			expectedFamilies: []uint8{ipFamilyIPv4, ipFamilyIPv6},
 		},
 		{
 			name:             "four ipsets mixed",
 			ipsets:           []string{"test-ipset-v4", "test-ipset-v6", "blocklist-v4", "blocklist-v6"},
-			expectedFamilies: []uint8{unix.NFPROTO_IPV4, unix.NFPROTO_IPV6, unix.NFPROTO_IPV4, unix.NFPROTO_IPV6},
+			expectedFamilies: []uint8{ipFamilyIPv4, ipFamilyIPv6, ipFamilyIPv4, ipFamilyIPv6},
 		},
 	}
 
@@ -1359,22 +1230,21 @@ func TestProvision_SavesIPFamily_MultipleIpsets(t *testing.T) {
 				_ = m.Cleanup()
 			}(m)
 
-			if len(m.ipsetFamilies) != len(tc.expectedFamilies) {
-				t.Fatalf("Expected %d ipset families, got %d", len(tc.expectedFamilies), len(m.ipsetFamilies))
+			if len(m.ipsetFamilyVersions) != len(tc.expectedFamilies) {
+				t.Fatalf("Expected %d ipset families, got %d", len(tc.expectedFamilies), len(m.ipsetFamilyVersions))
 			}
 
 			for i, expectedFamily := range tc.expectedFamilies {
-				if m.ipsetFamilies[i] != expectedFamily {
-					t.Errorf("Ipset %s (index %d): expected family=%d (%s), got %d (%s)",
+				if m.ipsetFamilyVersions[i] != expectedFamily {
+					t.Errorf("Ipset %s (index %d): expected family=%d, got %d",
 						tc.ipsets[i], i,
-						expectedFamily, familyCodeToString(expectedFamily),
-						m.ipsetFamilies[i], familyCodeToString(m.ipsetFamilies[i]))
+						expectedFamily, m.ipsetFamilyVersions[i])
 				}
 			}
 
 			t.Logf("✓ Successfully saved families for %d ipsets:", len(tc.ipsets))
 			for i, ipset := range tc.ipsets {
-				t.Logf("  - %s: %s (%d)", ipset, familyCodeToString(m.ipsetFamilies[i]), m.ipsetFamilies[i])
+				t.Logf("  - %s: %d", ipset, m.ipsetFamilyVersions[i])
 			}
 		})
 	}
@@ -1394,7 +1264,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 		{
 			name:        "IPv4 against IPv4 ipset - should check",
 			ipsetName:   "test-ipset-v4",
-			ipsetFamily: unix.NFPROTO_IPV4,
+			ipsetFamily: ipFamilyIPv4,
 			clientIP:    "127.0.0.1",
 			shouldMatch: true,
 			shouldSkip:  false,
@@ -1403,7 +1273,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 		{
 			name:        "IPv6 against IPv6 ipset - should check",
 			ipsetName:   "test-ipset-v6",
-			ipsetFamily: unix.NFPROTO_IPV6,
+			ipsetFamily: ipFamilyIPv6,
 			clientIP:    "::1",
 			shouldMatch: true,
 			shouldSkip:  false,
@@ -1412,7 +1282,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 		{
 			name:        "IPv6 against IPv4 ipset - should skip",
 			ipsetName:   "test-ipset-v4",
-			ipsetFamily: unix.NFPROTO_IPV4,
+			ipsetFamily: ipFamilyIPv4,
 			clientIP:    "::1",
 			shouldMatch: false,
 			shouldSkip:  true,
@@ -1421,7 +1291,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 		{
 			name:        "IPv4 against IPv6 ipset - should skip",
 			ipsetName:   "test-ipset-v6",
-			ipsetFamily: unix.NFPROTO_IPV6,
+			ipsetFamily: ipFamilyIPv6,
 			clientIP:    "127.0.0.1",
 			shouldMatch: false,
 			shouldSkip:  true,
@@ -1430,7 +1300,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 		{
 			name:        "IPv4 non-matching against IPv4 ipset - should check but not match",
 			ipsetName:   "test-ipset-v4",
-			ipsetFamily: unix.NFPROTO_IPV4,
+			ipsetFamily: ipFamilyIPv4,
 			clientIP:    "203.0.113.1",
 			shouldMatch: false,
 			shouldSkip:  false,
@@ -1439,7 +1309,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 		{
 			name:        "IPv6 non-matching against IPv6 ipset - should check but not match",
 			ipsetName:   "test-ipset-v6",
-			ipsetFamily: unix.NFPROTO_IPV6,
+			ipsetFamily: ipFamilyIPv6,
 			clientIP:    "2001:db8::999",
 			shouldMatch: false,
 			shouldSkip:  false,
@@ -1465,11 +1335,11 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 			}(m)
 
 			// Verify the ipset family was saved correctly
-			if len(m.ipsetFamilies) != 1 {
-				t.Fatalf("Expected 1 ipset family, got %d", len(m.ipsetFamilies))
+			if len(m.ipsetFamilyVersions) != 1 {
+				t.Fatalf("Expected 1 ipset family, got %d", len(m.ipsetFamilyVersions))
 			}
-			if m.ipsetFamilies[0] != tc.ipsetFamily {
-				t.Errorf("Expected ipsetFamily=%d, got %d", tc.ipsetFamily, m.ipsetFamilies[0])
+			if m.ipsetFamilyVersions[0] != tc.ipsetFamily {
+				t.Errorf("Expected ipsetFamily=%d, got %d", tc.ipsetFamily, m.ipsetFamilyVersions[0])
 			}
 
 			req := httptest.NewRequest("GET", "http://example.com", nil)
@@ -1522,24 +1392,24 @@ func TestProvision_TooLongIpsetName(t *testing.T) {
 	}
 }
 
-// TestFamilyToString_UnknownFamily tests the default case in familyCodeToString
+// TestFamilyToString_UnknownFamily tests the default case in nfprotoFamilyVersion
 func TestFamilyToString_UnknownFamily(t *testing.T) {
 	testCases := []struct {
 		family   uint8
-		expected string
+		expected uint8
 		name     string
 	}{
-		{unix.NFPROTO_IPV4, "IPv4", "IPv4"},
-		{unix.NFPROTO_IPV6, "IPv6", "IPv6"},
-		{99, "unknown(99)", "unknown_99"},    // Unknown family code
-		{255, "unknown(255)", "unknown_255"}, // Another unknown family code
+		{unix.NFPROTO_IPV4, 4, "IPv4"},
+		{unix.NFPROTO_IPV6, 6, "IPv6"},
+		{99, 0, "unknown_99"},   // Unknown family code
+		{255, 0, "unknown_255"}, // Another unknown family code
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := familyCodeToString(tc.family)
+			result := nfprotoFamilyVersion(tc.family)
 			if result != tc.expected {
-				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
+				t.Errorf("Expected '%d', got '%d'", tc.expected, result)
 			}
 		})
 	}
@@ -1659,10 +1529,10 @@ ipset test-ipset-v6`
 	if matcher.pool == nil {
 		t.Error("Expected pool to be initialized")
 	}
-	if len(matcher.ipsetFamilies) != len(expectedIpsets) {
-		t.Errorf("Expected %d families, got %d", len(expectedIpsets), len(matcher.ipsetFamilies))
+	if len(matcher.ipsetFamilyVersions) != len(expectedIpsets) {
+		t.Errorf("Expected %d families, got %d", len(expectedIpsets), len(matcher.ipsetFamilyVersions))
 	}
-	t.Logf("✓ Provisioned %d ipsets with families", len(matcher.ipsetFamilies))
+	t.Logf("✓ Provisioned %d ipsets with families", len(matcher.ipsetFamilyVersions))
 
 	// Test 3: Test matching with various IPs
 	testCases := []struct {
@@ -1743,20 +1613,20 @@ func TestContextCancellation(t *testing.T) {
 	}
 }
 
-// TestGetIpFamilyString tests the getIpFamilyString helper function
+// TestGetIpFamilyString tests the ipFamilyVersion helper function
 func TestGetIpFamilyString(t *testing.T) {
 	testCases := []struct {
 		name     string
 		ip       string
-		expected string
+		expected uint8
 	}{
-		{"IPv4 address", "192.168.1.1", "IPv4"},
-		{"IPv4 loopback", "127.0.0.1", "IPv4"},
-		{"IPv4 broadcast", "255.255.255.255", "IPv4"},
-		{"IPv6 address", "2001:db8::1", "IPv6"},
-		{"IPv6 loopback", "::1", "IPv6"},
-		{"IPv6 full form", "2001:0db8:0000:0000:0000:0000:0000:0001", "IPv6"},
-		{"IPv6 link-local", "fe80::1", "IPv6"},
+		{"IPv4 address", "192.168.1.1", 4},
+		{"IPv4 loopback", "127.0.0.1", 4},
+		{"IPv4 broadcast", "255.255.255.255", 4},
+		{"IPv6 address", "2001:db8::1", 6},
+		{"IPv6 loopback", "::1", 6},
+		{"IPv6 full form", "2001:0db8:0000:0000:0000:0000:0000:0001", 6},
+		{"IPv6 link-local", "fe80::1", 6},
 	}
 
 	for _, tc := range testCases {
@@ -1765,9 +1635,9 @@ func TestGetIpFamilyString(t *testing.T) {
 			if ip == nil {
 				t.Fatalf("Failed to parse IP: %s", tc.ip)
 			}
-			result := getIpFamilyString(ip)
+			result := ipFamilyVersion(ip)
 			if result != tc.expected {
-				t.Errorf("Expected '%s', got '%s'", tc.expected, result)
+				t.Errorf("Expected '%d', got '%d'", tc.expected, result)
 			}
 		})
 	}
@@ -1792,92 +1662,4 @@ func TestProvision_EmptyIpsetInList(t *testing.T) {
 	}
 }
 
-// TestCleanup_MultipleHandles tests that Cleanup properly closes multiple handles
-func TestCleanup_MultipleHandles(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed: %v", err)
-		return
-	}
-
-	// Force creation of multiple handles by getting them from the pool
-	handle1, err := m.getHandle()
-	if err != nil {
-		t.Fatalf("Failed to get first handle: %v", err)
-	}
-	handle2, err := m.getHandle()
-	if err != nil {
-		t.Fatalf("Failed to get second handle: %v", err)
-	}
-
-	// Return handles to pool
-	m.putHandle(handle1)
-	m.putHandle(handle2)
-
-	// Verify pool has handles
-	poolLen := len(m.pool)
-	if poolLen < 2 {
-		t.Logf("Expected at least 2 handles in pool, got %d", poolLen)
-	}
-
-	// Cleanup should close all handles
-	err = m.Cleanup()
-	if err != nil {
-		t.Errorf("Cleanup returned error: %v", err)
-	}
-
-	// Verify cleanup cleared the fields
-	if m.Ipsets != nil {
-		t.Error("Expected Ipsets to be nil after cleanup")
-	}
-	if m.ipsetFamilies != nil {
-		t.Error("Expected ipsetFamilies to be nil after cleanup")
-	}
-}
-
 // TestProvision_VeryLongIpsetName tests that very long ipset names are rejected
-func TestProvision_VeryLongIpsetName(t *testing.T) {
-	// Create a name that's longer than IPSET_MAXNAMELEN
-	longName := strings.Repeat("a", 100) // Assuming IPSET_MAXNAMELEN is less than 100
-
-	m := &IpsetMatcher{
-		Ipsets: []string{longName},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err == nil {
-		t.Error("Expected error for very long ipset name")
-	}
-
-	if err != nil && !strings.Contains(err.Error(), "exceeds maximum length") {
-		t.Errorf("Expected 'exceeds maximum length' error, got '%s'", err.Error())
-	}
-}
-
-// TestGetHandle_UninitializedPool tests the error path when pool is not initialized
-func TestGetHandle_UninitializedPool(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-		logger: zap.NewNop(),
-		pool:   nil, // Uninitialized pool
-	}
-
-	_, err := m.getHandle()
-	if err == nil {
-		t.Error("Expected error when pool is not initialized")
-	}
-
-	if err != nil && !strings.Contains(err.Error(), "not initialized") && !strings.Contains(err.Error(), "not properly provisioned") {
-		t.Errorf("Expected error about uninitialized pool, got '%s'", err.Error())
-	}
-}

@@ -4,10 +4,10 @@ go 1.25
 
 require (
 	github.com/caddyserver/caddy/v2 v2.10.2
+	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635
 	github.com/vishvananda/netlink v1.3.1
 	go.uber.org/zap v1.27.1
 	golang.org/x/sys v0.40.0
-	kernel.org/pub/linux/libs/security/libcap/cap v1.2.77
 )
 
 require (
@@ -73,7 +73,6 @@ require (
 	github.com/mitchellh/reflectwalk v1.0.2 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
-	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/prometheus/client_golang v1.23.2 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -132,5 +131,4 @@ require (
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	howett.net/plist v1.0.0 // indirect
-	kernel.org/pub/linux/libs/security/libcap/psx v1.2.77 // indirect
 )
