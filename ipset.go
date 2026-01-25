@@ -238,8 +238,8 @@ drainLoop:
 		}
 	}
 
-	m.logger.Debug("ipset matcher cleaned up, closed pooled netlink handles",
-		zap.Int("count", count),
+	m.logger.Info("ipset matcher cleaned up",
+		zap.Int("closed_handles", count),
 		zap.Uint64("instance_id", m.instanceID),
 	)
 
