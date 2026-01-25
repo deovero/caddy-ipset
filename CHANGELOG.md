@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replaced `sync.Pool` with a leaky bucket pattern for netlink handles. The previous implementation was risky
   for memory/resource leaks and unbound growth.
 - Removed check for empty ipset names in `Provision()` because it's already checked in `UnmarshalCaddyfile()`.
+- Replace our own instance counter with Caddy's `InstanceID()` to generate unique instance IDs for logging.
 
 ## [0.4.5] - 2026-01-24
 
