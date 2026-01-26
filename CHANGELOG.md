@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.8]
+
 ### Changed
 - Logging to Info on cleanup
 - No longer checking for request context cancellation since because it caused errors in the logs while it's
