@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Logging to Info on cleanup
 - No longer checking for request context cancellation since because it caused errors in the logs while it's
-  not that expensive to complete checking the ipsets.
+  not that expensive to complete checking the ipsets for that request.
 
 ### Testing
 - Increased test coverage to 91.6%
