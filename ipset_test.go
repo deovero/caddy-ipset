@@ -13,6 +13,7 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
@@ -1397,5 +1398,113 @@ func TestPutHandle_ClosedModule(t *testing.T) {
 	poolSize := len(m.pool)
 	if poolSize != 0 {
 		t.Errorf("Expected pool to be empty after cleanup, got %d handles", poolSize)
+	}
+}
+
+// TestMatchWithError_MissingClientIPVar tests error when ClientIPVarKey is not set
+func TestMatchWithError_MissingClientIPVar(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4"},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
+
+	// Create a request without setting ClientIPVarKey
+	req := httptest.NewRequest("GET", "https://example.com", nil)
+
+	// Prepare the request with Caddy context but don't set ClientIPVarKey
+	repl := caddyhttp.NewTestReplacer(req)
+	w := httptest.NewRecorder()
+	req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+	// Manually remove the ClientIPVarKey if it was set by PrepareRequest
+	// We need to create a new context without the key
+	req = req.WithContext(context.Background())
+
+	// This should return an error because ClientIPVarKey is not set
+	result, err := m.MatchWithError(req)
+	if err == nil {
+		t.Error("Expected error when ClientIPVarKey is not set")
+	}
+	if err != nil && !strings.Contains(err.Error(), "not found in request context") {
+		t.Errorf("Expected error about missing ClientIPVarKey, got: %v", err)
+	}
+	if result {
+		t.Error("Expected MatchWithError to return false when ClientIPVarKey is not set")
+	}
+}
+
+// TestPutHandle_PoolFull tests the scenario where the pool is full
+func TestPutHandle_PoolFull(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4"},
+		logger: zap.NewNop(),
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
+
+	// Fill the pool to capacity
+	poolCapacity := cap(m.pool)
+	handles := make([]*netlink.Handle, 0, poolCapacity)
+
+	// Create handles to fill the pool
+	for i := 0; i < poolCapacity; i++ {
+		h, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+		if err != nil {
+			t.Skipf("Failed to create handle: %v", err)
+			return
+		}
+		handles = append(handles, h)
+		m.pool <- h
+	}
+
+	// Verify pool is full
+	if len(m.pool) != poolCapacity {
+		t.Fatalf("Expected pool to be full (%d), got %d", poolCapacity, len(m.pool))
+	}
+
+	// Now try to put one more handle - it should be closed instead of added to pool
+	extraHandle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+	if err != nil {
+		t.Skipf("Failed to create extra handle: %v", err)
+		return
+	}
+
+	// This should trigger the pool full path
+	m.putHandle(extraHandle)
+
+	// Pool should still be at capacity (the extra handle was discarded)
+	if len(m.pool) != poolCapacity {
+		t.Errorf("Expected pool to remain at capacity (%d), got %d", poolCapacity, len(m.pool))
+	}
+
+	// Clean up the handles we created
+	for _, h := range handles {
+		<-m.pool // Remove from pool
+		h.Close()
 	}
 }

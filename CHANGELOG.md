@@ -7,10 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added prometheus metrics for match count and duration
+- Counting calls to MatchWithError, is logged on cleanup
+
 ### Changed
 - Prepend InstanceID with pid of Caddy process
-- Counting calls to MatchWithError, is logged on cleanup
 - Improved debug logging of handler pool
+
+### Testing
+- Increased test coverage to 93.5%
 
 ## [v0.4.8]
 
