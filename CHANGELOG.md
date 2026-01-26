@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Added prometheus metrics for match count and duration
 - Counting calls to MatchWithError, is logged on cleanup
 
 ### Changed
