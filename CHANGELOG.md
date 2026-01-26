@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Better debug logging of handler pool
+
 ## [v0.4.8]
 
 ### Changed

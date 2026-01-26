@@ -432,9 +432,13 @@ func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 
 	select {
 	case h := <-m.pool:
+		m.logger.Debug("reused handle from pool",
+			zap.Int("pool_size_after_get", len(m.pool)),
+			zap.Uint64("instance_id", m.instanceID),
+		)
 		return h, nil
 	default:
-		// Pool is empty, create a fresh handle
+		// Pool was empty when select executed, create a fresh handle
 		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
 		if err != nil {
 			return nil, fmt.Errorf(
@@ -442,8 +446,7 @@ func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 				m.instanceID, err,
 			)
 		}
-		m.logger.Debug("created new netlink handle",
-			zap.Int("pool_size", len(m.pool)),
+		m.logger.Debug("created new netlink handle, pool was empty",
 			zap.Uint64("instance_id", m.instanceID),
 		)
 		return handle, nil
@@ -466,8 +469,17 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	select {
 	case m.pool <- h:
 		// Successfully returned to pool
+		m.logger.Debug("returned handle to pool",
+			zap.Int("pool_size_after_return", len(m.pool)),
+			zap.Uint64("instance_id", m.instanceID),
+		)
 	default:
 		// Pool is full, close and discard
+		m.logger.Debug("pool full, discarding handle",
+			zap.Int("pool_size", len(m.pool)),
+			zap.Int("pool_capacity", cap(m.pool)),
+			zap.Uint64("instance_id", m.instanceID),
+		)
 		h.Close()
 	}
 }
