@@ -103,12 +103,6 @@ type IpsetMatcher struct {
 	// closed is an atomic flag to indicate if the module is being cleaned up
 	closed int32
 
-	// handlesCreated tracks the total number of handles created during the lifetime of this instance
-	handlesCreated int64
-
-	// handlesClosed tracks the total number of handles closed during the lifetime of this instance
-	handlesClosed int64
-
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
 }
@@ -227,7 +221,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 func (m *IpsetMatcher) Cleanup() error {
 	// Not closing the channel because during reload some handles may still be in use.
 	// Only closing returned handles for the same reason.
-	poolHandlesClosed := 0
+	count := 0
 	// Mark as closed first to prevent new requests from starting new handles
 	atomic.StoreInt32(&m.closed, 1)
 
@@ -237,8 +231,7 @@ drainLoop:
 		case handle := <-m.pool:
 			if handle != nil {
 				handle.Close()
-				atomic.AddInt64(&m.handlesClosed, 1)
-				poolHandlesClosed++
+				count++
 			}
 		default:
 			// Pool is empty
@@ -246,14 +239,8 @@ drainLoop:
 		}
 	}
 
-	// Get final counts
-	totalCreated := atomic.LoadInt64(&m.handlesCreated)
-	totalClosed := atomic.LoadInt64(&m.handlesClosed)
-
 	m.logger.Info("ipset matcher cleaned up",
-		zap.Int("pool_handles_closed", poolHandlesClosed),
-		zap.Int64("total_handles_created", totalCreated),
-		zap.Int64("total_handles_closed", totalClosed),
+		zap.Int("closed_handles", count),
 		zap.Uint64("instance_id", m.instanceID),
 	)
 
@@ -459,7 +446,6 @@ func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 				m.instanceID, err,
 			)
 		}
-		atomic.AddInt64(&m.handlesCreated, 1)
 		m.logger.Debug("created new netlink handle, pool was empty",
 			zap.Uint64("instance_id", m.instanceID),
 		)
@@ -477,7 +463,6 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	// If module is closed, destroy the handle immediately
 	if atomic.LoadInt32(&m.closed) == 1 {
 		h.Close()
-		atomic.AddInt64(&m.handlesClosed, 1)
 		m.logger.Debug("discarded handle because module is closed",
 			zap.Uint64("instance_id", m.instanceID),
 		)
@@ -499,7 +484,6 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 			zap.Uint64("instance_id", m.instanceID),
 		)
 		h.Close()
-		atomic.AddInt64(&m.handlesClosed, 1)
 	}
 }
 
