@@ -9,9 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Logging to Info on cleanup
+- No longer checking for request context cancellation since because it caused errors in the logs while it's
+  not that expensive to complete checking the ipsets.
 
 ### Testing
-- Increased test coverage to 91.8%
+- Increased test coverage to 91.6%
+- Cleaned up tests
+- Added tests for IPv4-mapped IPv6 addresses
+- Added tests for an ipset name with spaces
+- ipsets are no longer built in Docker image but initialized before testing
+- Simplified Dockerfile
+
+### Documentation
+- Added comments about IPv4-mapped IPv6 addresses
 
 ## [v0.4.7]
 

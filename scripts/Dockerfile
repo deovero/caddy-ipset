@@ -53,28 +53,4 @@ RUN useradd -m -s /bin/bash testuser
 # Set working directory
 WORKDIR /workspace
 
-# Copy go.mod and go.sum first for better caching
-COPY go.mod go.sum ./
-RUN go mod download
-
-# Copy the rest of the source code
-COPY . .
-
-# Install the shared setup script
-RUN cp scripts/setup-test-ipsets.sh /usr/local/bin/setup-test-ipsets.sh \
-    && chmod +x /usr/local/bin/setup-test-ipsets.sh
-
-# Create entrypoint script
-RUN echo '#!/bin/bash\n\
-set -e\n\
-\n\
-# Setup ipsets\n\
-/usr/local/bin/setup-test-ipsets.sh\n\
-\n\
-# Execute the command passed to docker run\n\
-exec "$@"\n\
-' > /entrypoint.sh \
-    && chmod +x /entrypoint.sh
-
-ENTRYPOINT ["/entrypoint.sh"]
 CMD ["/bin/bash"]

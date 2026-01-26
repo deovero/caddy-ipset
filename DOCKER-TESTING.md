@@ -78,6 +78,9 @@ make shell
 Inside the container, you can:
 
 ```bash
+# Setup ipsets
+/workspace/scripts/setup-test-ipsets.sh
+
 # Run tests
 go test -v ./...
 
@@ -106,6 +109,8 @@ echo -e "\n\nShould NOT match:"
 curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.1'
 echo -e "\n\nShould match:"
 curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
+echo -e "\n\nShould match:"
+curl http://127.0.0.1:20080 --header 'X-Forwarded-For: ::ffff:192.168.1.100'
 echo -e "\n"
 for i in $(seq 1 10000); do curl -s -o /dev/null http://127.0.0.1:20080; done
 pkill caddy

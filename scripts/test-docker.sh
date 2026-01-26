@@ -16,11 +16,6 @@ if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && ! grep -q docker /proc
     exit 1
 fi
 
-echo "========================================="
-echo "Running tests in Docker container"
-echo "========================================="
-echo ""
-
 # Check if ipsets are set up
 echo -e "${YELLOW}Checking ipset setup...${NC}"
 if ! ipset list -n &>/dev/null; then
@@ -28,9 +23,8 @@ if ! ipset list -n &>/dev/null; then
     exit 1
 fi
 
-echo -e "${GREEN}Available ipsets:${NC}"
-ipset list -n
-echo ""
+echo -e "${YELLOW}Setting up test ipsets...${NC}"
+/workspace/scripts/setup-test-ipsets.sh
 
 # Run go vet
 echo -e "${YELLOW}Running go vet...${NC}"

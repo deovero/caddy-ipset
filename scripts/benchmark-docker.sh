@@ -16,11 +16,10 @@ if [ ! -f /.dockerenv ] && [ ! -f /run/.containerenv ] && ! grep -q docker /proc
     exit 1
 fi
 
-echo "========================================="
-echo "Running benchmarks in Docker container"
-echo "========================================="
-echo ""
+echo -e "${YELLOW}Setting up test ipsets...${NC}"
+/workspace/scripts/setup-test-ipsets.sh
 
+echo -e "${YELLOW}Running benchmarks...${NC}"
 go test -bench=. -benchmem -v | grep '^Benchmark' | tee results/benchmark.txt
 BUILD_EXIT_CODE=$?
 

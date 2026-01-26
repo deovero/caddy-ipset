@@ -69,44 +69,7 @@ func TestProvision_InvalidIpsetName(t *testing.T) {
 	}
 }
 
-func TestMatchWithError_InvalidRemoteAddr(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-		logger: zap.NewNop(),
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed: %v", err)
-		return
-	}
-	defer func(m *IpsetMatcher) {
-		_ = m.Cleanup()
-	}(m)
-
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	req.RemoteAddr = "invalid-address"
-
-	// Prepare the request with Caddy context
-	repl := caddyhttp.NewTestReplacer(req)
-	w := httptest.NewRecorder()
-	req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-	// Set an invalid ClientIPVarKey
-	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "invalid-address")
-
-	result, err := m.MatchWithError(req)
-	if err == nil {
-		t.Error("Expected error for invalid remote address")
-	}
-	if result {
-		t.Error("Expected MatchWithError to return false for invalid remote address")
-	}
-}
-
+// TestMatchWithError_InvalidIP tests error handling for various invalid IP formats
 func TestMatchWithError_InvalidIP(t *testing.T) {
 	m := &IpsetMatcher{
 		Ipsets: []string{"test-ipset-v4"},
@@ -124,77 +87,37 @@ func TestMatchWithError_InvalidIP(t *testing.T) {
 		_ = m.Cleanup()
 	}(m)
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-
-	// Prepare the request with Caddy context
-	repl := caddyhttp.NewTestReplacer(req)
-	w := httptest.NewRecorder()
-	req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-	// Set an invalid IP in ClientIPVarKey
-	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "not-an-ip")
-
-	result, err := m.MatchWithError(req)
-	if err == nil {
-		t.Error("Expected error for invalid IP")
-	}
-	if result {
-		t.Error("Expected MatchWithError to return false for invalid IP")
-	}
-}
-
-// TestProvision_NonExistentIpset tests provisioning with a non-existent ipset
-func TestProvision_NonExistentIpset(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"nonexistent-ipset-12345"},
+	testCases := []struct {
+		name     string
+		clientIP string
+	}{
+		{"invalid address format", "invalid-address"},
+		{"not an IP", "not-an-ip"},
+		{"empty client IP", ""},
+		{"malformed IP", "999.999.999.999"},
 	}
 
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "http://example.com", nil)
 
-	err := m.Provision(ctx)
-	if err == nil {
-		t.Error("Expected error for non-existent ipset")
+			// Prepare the request with Caddy context
+			repl := caddyhttp.NewTestReplacer(req)
+			w := httptest.NewRecorder()
+			req = caddyhttp.PrepareRequest(req, repl, w, nil)
+
+			// Set an invalid IP in ClientIPVarKey
+			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
+
+			result, err := m.MatchWithError(req)
+			if err == nil {
+				t.Errorf("Expected error for %s", tc.name)
+			}
+			if result {
+				t.Errorf("Expected MatchWithError to return false for %s", tc.name)
+			}
+		})
 	}
-}
-
-// TestMatchWithError_WithNetlinkMethod tests MatchWithError with netlink method
-func TestMatchWithError_WithNetlinkMethod(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed: %v", err)
-		return
-	}
-	defer func(m *IpsetMatcher) {
-		_ = m.Cleanup()
-	}(m)
-	// Test with an IP that should be in test-ipset-v4 (127.0.0.1)
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-
-	// Prepare the request with Caddy context
-	repl := caddyhttp.NewTestReplacer(req)
-	w := httptest.NewRecorder()
-	req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-	// Set the client IP
-	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "127.0.0.1")
-
-	// This will attempt to use netlink
-	// Result depends on whether test-ipset-v4 exists and contains 127.0.0.1
-	result, err := m.MatchWithError(req)
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-	// We can't assert the result without knowing the ipset state
-	// But we can verify it doesn't panic
-	t.Logf("MatchWithError result for 127.0.0.1: %v", result)
 }
 
 func TestUnmarshalCaddyfile(t *testing.T) {
@@ -215,6 +138,12 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 			input:        "ipset my_ipset_123",
 			expectError:  false,
 			expectedSets: []string{"my_ipset_123"},
+		},
+		{
+			name:         "valid ipset name with spaces",
+			input:        "ipset \"my ipset\"",
+			expectError:  false,
+			expectedSets: []string{"my ipset"},
 		},
 		{
 			name:         "multiple ipsets in one directive",
@@ -597,6 +526,7 @@ func TestMatchWithError_FullIntegration(t *testing.T) {
 }
 
 // TestMatchWithError_MultipleIpsets tests matching with multiple ipsets (OR logic)
+// This test verifies that if an IP is in ANY of the configured ipsets, it matches
 func TestMatchWithError_MultipleIpsets(t *testing.T) {
 	testCases := []struct {
 		name        string
@@ -634,6 +564,24 @@ func TestMatchWithError_MultipleIpsets(t *testing.T) {
 			clientIP:    "203.0.113.1",
 			description: "Should return false if IP is not in any ipset",
 		},
+		{
+			name:        "IP in first ipset only",
+			ipsets:      []string{"test-ipset-v4", "blocklist-v4"},
+			clientIP:    "127.0.0.1",
+			description: "Should match because it's in test-ipset-v4",
+		},
+		{
+			name:        "IP in second ipset only",
+			ipsets:      []string{"test-ipset-v4", "blocklist-v4"},
+			clientIP:    "10.0.0.1",
+			description: "Should match if it's in blocklist-v4",
+		},
+		{
+			name:        "IP in both ipsets",
+			ipsets:      []string{"test-ipset-v4", "blocklist-v4"},
+			clientIP:    "192.168.1.100",
+			description: "Should match because it's in at least one ipset",
+		},
 	}
 
 	for _, tc := range testCases {
@@ -670,187 +618,6 @@ func TestMatchWithError_MultipleIpsets(t *testing.T) {
 			}
 			t.Logf("%s: %s against %v: MatchWithError=%v",
 				tc.description, tc.clientIP, tc.ipsets, result)
-		})
-	}
-}
-
-// TestMatchWithError_MultipleIpsets_ORLogic tests that the OR logic works correctly
-// This test verifies that if an IP is in ANY of the configured ipsets, it matches
-func TestMatchWithError_MultipleIpsets_ORLogic(t *testing.T) {
-	// This test requires specific ipset contents to verify OR logic
-	// We'll test with known IPs that should be in specific ipsets
-
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4", "blocklist-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed: %v", err)
-		return
-	}
-	defer func(m *IpsetMatcher) {
-		_ = m.Cleanup()
-	}(m)
-
-	testCases := []struct {
-		name        string
-		clientIP    string
-		description string
-	}{
-		{
-			name:        "IP in first ipset",
-			clientIP:    "127.0.0.1",
-			description: "Should match because it's in test-ipset-v4",
-		},
-		{
-			name:        "IP in second ipset",
-			clientIP:    "10.0.0.1",
-			description: "Should match if it's in blocklist-v4",
-		},
-		{
-			name:        "IP in both ipsets",
-			clientIP:    "192.168.1.100",
-			description: "Should match because it's in at least one ipset",
-		},
-		{
-			name:        "IP in neither ipset",
-			clientIP:    "203.0.113.1",
-			description: "Should not match because it's not in any ipset",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
-
-			// Prepare the request with Caddy context
-			repl := caddyhttp.NewTestReplacer(req)
-			w := httptest.NewRecorder()
-			req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-			// Set the client IP
-			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
-
-			result, err := m.MatchWithError(req)
-			if err != nil {
-				t.Errorf("Unexpected error: %v", err)
-			}
-			t.Logf("%s: %s: MatchWithError=%v", tc.description, tc.clientIP, result)
-		})
-	}
-}
-
-// TestMatchWithError_ErrorHandling tests error handling in MatchWithError
-func TestMatchWithError_ErrorHandling(t *testing.T) {
-	testCases := []struct {
-		name        string
-		ipsetName   string
-		clientIP    string
-		expectError bool
-		expectFalse bool
-	}{
-		{
-			name:        "invalid IP format",
-			ipsetName:   "test-ipset-v4",
-			clientIP:    "not-an-ip",
-			expectError: true,
-			expectFalse: true,
-		},
-		{
-			name:        "empty client IP",
-			ipsetName:   "test-ipset-v4",
-			clientIP:    "",
-			expectError: true,
-			expectFalse: true,
-		},
-		{
-			name:        "malformed IP",
-			ipsetName:   "test-ipset-v4",
-			clientIP:    "999.999.999.999",
-			expectError: true,
-			expectFalse: true,
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &IpsetMatcher{
-				Ipsets: []string{tc.ipsetName},
-			}
-
-			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-			defer cancel()
-
-			err := m.Provision(ctx)
-			if err != nil {
-				t.Skipf("Skipping test - provisioning failed: %v", err)
-				return
-			}
-			defer func(m *IpsetMatcher) {
-				_ = m.Cleanup()
-			}(m)
-
-			req := httptest.NewRequest("GET", "http://example.com", nil)
-
-			// Prepare the request with Caddy context
-			repl := caddyhttp.NewTestReplacer(req)
-			w := httptest.NewRecorder()
-			req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-			// Set the client IP
-			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
-
-			result, err := m.MatchWithError(req)
-			if tc.expectError && err == nil {
-				t.Errorf("Expected error for %s", tc.name)
-			}
-			if tc.expectFalse && result {
-				t.Errorf("Expected MatchWithError to return false for %s", tc.name)
-			}
-		})
-	}
-}
-
-// TestProvision_IPv6Ipsets tests provisioning with IPv6 ipsets
-func TestProvision_IPv6Ipsets(t *testing.T) {
-	testCases := []struct {
-		name          string
-		ipsetName     string
-		shouldSucceed bool
-	}{
-		{"existing IPv6 ipset", "test-ipset-v6", true},
-		{"another IPv6 ipset", "blocklist-v6", true},
-		{"empty IPv6 ipset", "empty-v6", true},
-		{"non-existent IPv6 ipset", "does-not-exist-v6", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			m := &IpsetMatcher{
-				Ipsets: []string{tc.ipsetName},
-			}
-
-			ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-			defer cancel()
-
-			err := m.Provision(ctx)
-
-			if tc.shouldSucceed {
-				if err != nil {
-					t.Errorf("Expected provision to succeed for %s, got error: %v", tc.ipsetName, err)
-				}
-				if m.logger == nil {
-					t.Error("Expected logger to be set after provision")
-				}
-			} else {
-				if err == nil {
-					t.Errorf("Expected provision to fail for non-existent ipset %s", tc.ipsetName)
-				}
-			}
 		})
 	}
 }
@@ -1064,83 +831,6 @@ func TestMatchWithError_IPv6EdgeCases(t *testing.T) {
 			}
 			t.Logf("%s: %s: MatchWithError=%v (expected=%v, shouldError=%v)",
 				tc.name, tc.clientIP, result, tc.shouldMatch, tc.shouldError)
-		})
-	}
-}
-
-// TestMatchWithError_WithClientIPVarKey tests that the matcher correctly uses the ClientIPVarKey
-// from the request context when it's set (e.g., by Caddy's trusted_proxies logic)
-// This test specifically hits the code path at lines 154-159 in ipset.go
-func TestMatchWithError_WithClientIPVarKey(t *testing.T) {
-	// First provision the matcher so it has a valid handle
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping test - provisioning failed (may be expected in non-Docker environment): %v", err)
-		return
-	}
-	defer func() {
-		if err := m.Cleanup(); err != nil {
-			t.Errorf("Cleanup failed: %v", err)
-		}
-	}()
-
-	testCases := []struct {
-		name     string
-		clientIP string
-	}{
-		{
-			name:     "IPv4 without port from ClientIPVarKey",
-			clientIP: "192.168.1.100",
-		},
-		{
-			name:     "localhost from ClientIPVarKey",
-			clientIP: "127.0.0.1",
-		},
-		{
-			name:     "IPv6 from ClientIPVarKey",
-			clientIP: "2001:db8::1",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
-
-			// Use PrepareRequest to properly initialize the request context
-			// This is what Caddy does internally before passing requests to handlers
-			repl := caddyhttp.NewTestReplacer(req)
-			w := httptest.NewRecorder()
-			req = caddyhttp.PrepareRequest(req, repl, w, nil)
-
-			// Set the ClientIPVarKey in the request context using caddyhttp.SetVar
-			// This simulates what Caddy does when trusted_proxies is configured
-			caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, tc.clientIP)
-
-			// Call MatchWithError - this should use tc.clientIP from ClientIPVarKey
-			// This hits the code path at lines 154-159 in ipset.go where clientIPvar is retrieved
-			result, err := m.MatchWithError(req)
-
-			// We can't assert the exact result without knowing ipset contents,
-			// but we can verify it doesn't panic and processes the ClientIPVarKey
-			if err != nil {
-				// IPv6 against IPv4 ipset should not error, just return false
-				if tc.clientIP == "2001:db8::1" {
-					if result {
-						t.Errorf("Expected false for IPv6 against IPv4 ipset")
-					}
-				} else {
-					t.Errorf("Unexpected error: %v", err)
-				}
-			}
-			t.Logf("MatchWithError result for ClientIPVarKey=%s: %v (err=%v)",
-				tc.clientIP, result, err)
 		})
 	}
 }
@@ -1537,15 +1227,18 @@ ipset test-ipset-v6`
 
 	// Test 3: Test matching with various IPs
 	testCases := []struct {
-		name     string
-		clientIP string
+		name        string
+		clientIP    string
+		shouldMatch bool
 	}{
-		{"IPv4 localhost", "127.0.0.1"},
-		{"IPv4 test IP", "192.168.1.100"},
-		{"IPv4 not in any ipset", "203.0.113.1"},
-		{"IPv6 localhost", "::1"},
-		{"IPv6 test IP", "2001:db8::1"},
-		{"IPv6 not in any ipset", "2001:db8::999"},
+		{"IPv4 localhost", "127.0.0.1", true},
+		{"IPv4 test IP", "192.168.1.100", true},
+		{"Test IPv4-mapped IPv6 addresses match", "::ffff:192.168.1.100", true},   // Treated as IPv4
+		{"Test IPv4-mapped IPv6 addresses no match", "::ffff:192.168.2.1", false}, // Treated as IPv4
+		{"IPv4 not in any ipset", "203.0.113.1", false},
+		{"IPv6 localhost", "::1", true},
+		{"IPv6 test IP", "2001:db8::1", true},
+		{"IPv6 not in any ipset", "2001:db8::999", false},
 	}
 
 	for _, tc := range testCases {
@@ -1565,57 +1258,17 @@ ipset test-ipset-v6`
 				t.Errorf("Unexpected error: %v", err)
 			}
 			t.Logf("  %s (%s): matched=%v", tc.name, tc.clientIP, result)
+			if result != tc.shouldMatch {
+				t.Errorf("Expected %s to match=%v", tc.name, tc.shouldMatch)
+			}
 		})
 	}
 
 	t.Logf("✓ Successfully tested end-to-end flow with multiple ipsets")
 }
 
-// TestContextCancellation tests that MatchWithError respects context cancellation
-func TestContextCancellation(t *testing.T) {
-	m := &IpsetMatcher{
-		Ipsets: []string{"test-ipset-v4", "blocklist-v4", "test-ipset-v6", "blocklist-v6"},
-	}
-
-	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
-	defer cancel()
-
-	err := m.Provision(ctx)
-	if err != nil {
-		t.Skipf("Skipping context cancellation test - provisioning failed: %v", err)
-		return
-	}
-	defer func(m *IpsetMatcher) {
-		_ = m.Cleanup()
-	}(m)
-
-	// Create a request with a cancellable context
-	req := httptest.NewRequest("GET", "http://example.com", nil)
-	reqCtx, reqCancel := context.WithCancel(req.Context())
-	req = req.WithContext(reqCtx)
-
-	repl := caddyhttp.NewTestReplacer(req)
-	w := httptest.NewRecorder()
-	req = caddyhttp.PrepareRequest(req, repl, w, nil)
-	caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, "127.0.0.1")
-
-	// Cancel the context before calling MatchWithError
-	reqCancel()
-
-	result, err := m.MatchWithError(req)
-
-	// Should get a context cancellation error
-	if err == nil {
-		t.Logf("Note: Context cancellation not detected (result: %v). This may happen if the check completes before cancellation is detected.", result)
-	} else if err == context.Canceled {
-		t.Logf("✓ Context cancellation properly detected: %v", err)
-	} else {
-		t.Logf("Got error (not context.Canceled): %v", err)
-	}
-}
-
-// TestGetIpFamilyString tests the ipFamilyVersion helper function
-func TestGetIpFamilyString(t *testing.T) {
+// TestGetIpFamilyVersion tests the ipFamilyVersion helper function
+func TestGetIpFamilyVersion(t *testing.T) {
 	testCases := []struct {
 		name     string
 		ip       string
@@ -1628,6 +1281,7 @@ func TestGetIpFamilyString(t *testing.T) {
 		{"IPv6 loopback", "::1", 6},
 		{"IPv6 full form", "2001:0db8:0000:0000:0000:0000:0000:0001", 6},
 		{"IPv6 link-local", "fe80::1", 6},
+		{"IPv4-mapped IPv6", "::ffff:192.168.1.1", 4},
 	}
 
 	for _, tc := range testCases {

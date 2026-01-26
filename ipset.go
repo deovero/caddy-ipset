@@ -250,6 +250,9 @@ drainLoop:
 // The client IP is determined using Caddy's built-in detection which respects
 // the trusted_proxies configuration.
 //
+// IPv4-mapped IPv6 addresses (e.g., ::ffff:192.168.1.1) are treated as IPv4
+// addresses because `vishvananda/netlink` treats them as IPv4 addresses.
+//
 // The matching process:
 //   - Extracts the client_ip from the request
 //   - Checks each configured ipsets in order
@@ -258,7 +261,6 @@ drainLoop:
 //   - Returns true if found in ANY ipset (OR logic)
 //
 // Returns false + error if:
-//   - The request context is canceled
 //   - The client IP is not found in the request context
 //   - There is a problem with the netlink handle
 //   - The client IP cannot be parsed
@@ -271,6 +273,9 @@ drainLoop:
 //   - the client's IP address is found in at least one configured ipset.
 //
 // We don't want to silently ignore errors here because this has security implications.
+//
+// We ignore context cancellation (e.g., client disconnects) to avoid returning an
+// unnecessary error. It is not that expensive to complete checking the ipsets.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Check if debug logging is enabled, caching here because it could change during module lifetime
 	debugEnabled := m.logger.Core().Enabled(zap.DebugLevel)
@@ -308,22 +313,8 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Return the handle to the pool (or close it if pool is full)
 	defer m.putHandle(handle)
 
-	// Get request context for cancellation support
-	ctx := req.Context()
-
 ipsetLoop:
 	for i, ipsetName := range m.Ipsets {
-		// Check for context cancellation (e.g., client disconnected)
-		select {
-		case <-ctx.Done():
-			return false, fmt.Errorf(
-				"request canceled while matching ipset '%s': %w [instance_id=%d]",
-				ipsetName, ctx.Err(), m.instanceID,
-			)
-		default:
-			// Continue processing
-		}
-
 		// Check if the IP family matches the ipset family (optimization)
 		ipsetFamily := m.ipsetFamilyVersions[i]
 		if ipsetFamily != ipFamilyUnknown && ipFamily != ipsetFamily {
@@ -492,6 +483,8 @@ func nfprotoFamilyVersion(family uint8) uint8 {
 }
 
 // ipFamilyVersion returns the family of the given IP address as a human-readable version.
+// For IPv4-mapped IPv6 addresses (e.g., ::ffff:192.168.1.1), this returns ipFamilyIPv4 because
+// `vishvananda/netlink` treats them as IPv4 addresses.
 func ipFamilyVersion(ip net.IP) uint8 {
 	if ip.To4() != nil {
 		return ipFamilyIPv4
