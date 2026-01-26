@@ -98,10 +98,13 @@ type IpsetMatcher struct {
 
 	// instanceID is a unique identifier for this matcher instance
 	// Used for logging to distinguish between multiple instances
-	instanceID uint64
+	instanceID string
 
 	// closed is an atomic flag to indicate if the module is being cleaned up
 	closed int32
+
+	// matchCount is a counter for the number of times the matcher has been called
+	matchCount uint64
 
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
@@ -137,7 +140,7 @@ func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Generate a unique instance ID for this matcher instance
-	m.instanceID = atomic.AddUint64(&instanceCounter, 1)
+	m.instanceID = fmt.Sprintf("%d.%d", os.Getpid(), atomic.AddUint64(&instanceCounter, 1))
 
 	// Get the logger from Caddy's context
 	m.logger = ctx.Logger()
@@ -154,7 +157,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	hasNetAdmin := caps.Get(capability.EFFECTIVE, capability.CAP_NET_ADMIN)
 	if hasNetAdmin {
 		m.logger.Debug("the process has CAP_NET_ADMIN capability",
-			zap.Uint64("instance_id", m.instanceID),
+			zap.String("instance_id", m.instanceID),
 		)
 	} else {
 		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
@@ -174,7 +177,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	if err != nil {
 		m.logger.Error("failed to create netlink handle for ipset validation",
 			zap.Error(err),
-			zap.Uint64("instance_id", m.instanceID),
+			zap.String("instance_id", m.instanceID),
 		)
 		return err
 	}
@@ -204,12 +207,12 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 			zap.String("ipset", ipsetName),
 			zap.String("type", result.TypeName),
 			zap.Uint8("family", m.ipsetFamilyVersions[i]),
-			zap.Uint64("instance_id", m.instanceID),
+			zap.String("instance_id", m.instanceID),
 		)
 	}
 
 	m.logger.Info("ipset matcher provisioned",
-		zap.Uint64("instance_id", m.instanceID),
+		zap.String("instance_id", m.instanceID),
 	)
 
 	return nil
@@ -241,7 +244,8 @@ drainLoop:
 
 	m.logger.Info("ipset matcher cleaned up",
 		zap.Int("closed_handles", count),
-		zap.Uint64("instance_id", m.instanceID),
+		zap.Uint64("match_count", m.matchCount),
+		zap.String("instance_id", m.instanceID),
 	)
 
 	return nil
@@ -282,6 +286,9 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// We don't store it in the struct because it could change during the lifetime of the module, although
 	// it's very unlikely without a reload (which triggers a restart of the module).
 	debugEnabled := m.logger.Core().Enabled(zap.DebugLevel)
+
+	// Increment the match count for this instance
+	atomic.AddUint64(&m.matchCount, 1)
 
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
 	clientIpVar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
@@ -336,7 +343,7 @@ ipsetLoop:
 		found, err := handle.IpsetTest(ipsetName, entry)
 		if err != nil {
 			return false, fmt.Errorf(
-				"error testing IP '%s' against ipset '%s': %w [instance_id=%d]",
+				"error testing IP '%s' against ipset '%s': %w [instance_id=%s]",
 				clientIpStr, ipsetName, err, m.instanceID,
 			)
 		}
@@ -425,29 +432,26 @@ func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 	if m.pool == nil {
 		return nil, fmt.Errorf(
-			"netlink handle pool not initialized - matcher not properly provisioned [instance_id=%d]",
+			"netlink handle pool not initialized - matcher not properly provisioned [instance_id=%s]",
 			m.instanceID,
 		)
 	}
 
 	select {
 	case h := <-m.pool:
-		m.logger.Debug("reused handle from pool",
-			zap.Int("pool_size_after_get", len(m.pool)),
-			zap.Uint64("instance_id", m.instanceID),
-		)
+		// Return handle received from pool // hot path
 		return h, nil
 	default:
 		// Pool was empty when select executed, create a fresh handle
 		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"failed to create new netlink handle [instance_id=%d]: %w",
+				"failed to create new netlink handle [instance_id=%s]: %w",
 				m.instanceID, err,
 			)
 		}
 		m.logger.Debug("created new netlink handle, pool was empty",
-			zap.Uint64("instance_id", m.instanceID),
+			zap.String("instance_id", m.instanceID),
 		)
 		return handle, nil
 	}
@@ -464,24 +468,20 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	if atomic.LoadInt32(&m.closed) == 1 {
 		h.Close()
 		m.logger.Debug("discarded handle because module is closed",
-			zap.Uint64("instance_id", m.instanceID),
+			zap.String("instance_id", m.instanceID),
 		)
 		return
 	}
 
 	select {
 	case m.pool <- h:
-		// Successfully returned to pool
-		m.logger.Debug("returned handle to pool",
-			zap.Int("pool_size_after_return", len(m.pool)),
-			zap.Uint64("instance_id", m.instanceID),
-		)
+		// Successfully returned to pool // hot path
 	default:
-		// Pool is full, close and discard
-		m.logger.Debug("pool full, discarding handle",
+		// Pool is full, close and discard. This should not happen under normal circumstances.
+		m.logger.Info("pool full, closing and discarding handle",
 			zap.Int("pool_size", len(m.pool)),
 			zap.Int("pool_capacity", cap(m.pool)),
-			zap.Uint64("instance_id", m.instanceID),
+			zap.String("instance_id", m.instanceID),
 		)
 		h.Close()
 	}

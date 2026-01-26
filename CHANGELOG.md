@@ -8,7 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Better debug logging of handler pool
+- Prepend InstanceID with pid of Caddy process
+- Counting calls to MatchWithError, is logged on cleanup
+- Improved debug logging of handler pool
 
 ## [v0.4.8]
 
