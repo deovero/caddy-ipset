@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 package caddy_ipset
 
@@ -99,7 +98,7 @@ func TestMatchWithError_InvalidIP(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -504,7 +503,7 @@ func TestMatchWithError_FullIntegration(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -602,7 +601,7 @@ func TestMatchWithError_MultipleIpsets(t *testing.T) {
 				_ = m.Cleanup()
 			}(m)
 
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -653,7 +652,7 @@ func TestMatchWithError_IPv6FullIntegration(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -696,7 +695,7 @@ func TestMatchWithError_IPv6WithClientIP(t *testing.T) {
 		_ = m.Cleanup()
 	}(m)
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
+	req := httptest.NewRequest("GET", "https://example.com", nil)
 
 	// Prepare the request with Caddy context
 	repl := caddyhttp.NewTestReplacer(req)
@@ -747,7 +746,7 @@ func TestMatchWithError_MixedIPv4AndIPv6(t *testing.T) {
 				_ = m.Cleanup()
 			}(m)
 
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -801,7 +800,7 @@ func TestMatchWithError_IPv6EdgeCases(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -1033,7 +1032,7 @@ func TestMatchWithError_IPFamilyOptimization(t *testing.T) {
 				t.Errorf("Expected ipsetFamily=%d, got %d", tc.ipsetFamily, m.ipsetFamilyVersions[0])
 			}
 
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)
@@ -1126,7 +1125,7 @@ func TestMatchWithError_ClientIPVarKeyNonString(t *testing.T) {
 		}
 	}()
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
+	req := httptest.NewRequest("GET", "https://example.com", nil)
 
 	// Prepare the request with Caddy context
 	repl := caddyhttp.NewTestReplacer(req)
@@ -1154,7 +1153,7 @@ func TestMatchWithError_UninitializedHandle(t *testing.T) {
 		pool:   nil, // Explicitly set to nil to simulate uninitialized state
 	}
 
-	req := httptest.NewRequest("GET", "http://example.com", nil)
+	req := httptest.NewRequest("GET", "https://example.com", nil)
 
 	// Prepare the request with Caddy context
 	repl := caddyhttp.NewTestReplacer(req)
@@ -1243,7 +1242,7 @@ ipset test-ipset-v6`
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			req := httptest.NewRequest("GET", "http://example.com", nil)
+			req := httptest.NewRequest("GET", "https://example.com", nil)
 
 			// Prepare the request with Caddy context
 			repl := caddyhttp.NewTestReplacer(req)

@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 // Package caddy_ipset provides a Caddy HTTP matcher module that matches requests
 // based on client IP addresses against Linux ipset lists.
@@ -110,6 +109,8 @@ type IpsetMatcher struct {
 
 // CaddyModule returns the Caddy module information.
 // must have a value receiver so it can be called from a pointer.
+//
+// noinspection GoMixedReceiverTypes
 func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 	return caddy.ModuleInfo{
 		ID:  "http.matchers.ipset",
@@ -274,36 +275,38 @@ drainLoop:
 //
 // We don't want to silently ignore errors here because this has security implications.
 //
-// We ignore context cancellation (e.g., client disconnects) to avoid returning an
+// We ignore context cancellation (e.g., client disconnects) to avoid logging an
 // unnecessary error. It is not that expensive to complete checking the ipsets.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
-	// Check if debug logging is enabled, caching here because it could change during module lifetime
+	// Performance optimization: Check if debug is enabled and cache it during the processing of this request.
+	// We don't store it in the struct because it could change during the lifetime of the module, although
+	// it's very unlikely without a reload (which triggers a restart of the module).
 	debugEnabled := m.logger.Core().Enabled(zap.DebugLevel)
 
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
-	clientIPvar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
-	if clientIPvar == nil {
+	clientIpVar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
+	if clientIpVar == nil {
 		// Maybe this can happen if the users trusted_proxies configuration is wrong?
 		return false, fmt.Errorf("%s not found in request context", caddyhttp.ClientIPVarKey)
 	}
-	clientIP, ok := clientIPvar.(string)
+	clientIpStr, ok := clientIpVar.(string)
 	if !ok {
 		// Should not happen because Caddy always sets this to a string
-		return false, fmt.Errorf("%s is not a string but a %T", caddyhttp.ClientIPVarKey, clientIPvar)
+		return false, fmt.Errorf("%s is not a string but a %T", caddyhttp.ClientIPVarKey, clientIpVar)
 	}
 
 	// Parse the IP address because Caddy passes it as a string
-	ip := net.ParseIP(clientIP)
-	if ip == nil {
+	clientIp := net.ParseIP(clientIpStr)
+	if clientIp == nil {
 		// Should not happen because Caddy's client IP detection should have already validated it
-		return false, fmt.Errorf("invalid IP address format '%s'", clientIP)
+		return false, fmt.Errorf("invalid IP address format '%s'", clientIpStr)
 	}
 
 	// Get the IP family string for comparison and logging
-	ipFamily := ipFamilyVersion(ip)
+	ipFamily := ipFamilyVersion(clientIp)
 
 	// Reuse IPSetEntry to avoid allocation per ipset test
-	entry := &netlink.IPSetEntry{IP: ip}
+	entry := &netlink.IPSetEntry{IP: clientIp}
 
 	// Borrow a handle from the pool (or create a new one)
 	handle, err := m.getHandle()
@@ -322,7 +325,7 @@ ipsetLoop:
 				// This is a hot path so we prevent string allocation if debug is not enabled
 				m.logger.Debug(
 					fmt.Sprintf("skipped matching of IPv%d address against IPv%d ipset", ipFamily, ipsetFamily),
-					zap.String("ip", clientIP),
+					zap.String("ip", clientIpStr),
 					zap.String("ipset", ipsetName),
 				)
 			}
@@ -334,7 +337,7 @@ ipsetLoop:
 		if err != nil {
 			return false, fmt.Errorf(
 				"error testing IP '%s' against ipset '%s': %w [instance_id=%d]",
-				clientIP, ipsetName, err, m.instanceID,
+				clientIpStr, ipsetName, err, m.instanceID,
 			)
 		}
 
@@ -343,7 +346,7 @@ ipsetLoop:
 			if debugEnabled {
 				// This is a hot path so we prevent string allocation if debug is not enabled
 				m.logger.Debug("IP matched in ipset",
-					zap.String("ip", clientIP),
+					zap.String("clientIp", clientIpStr),
 					zap.String("ipset", ipsetName),
 				)
 			}
@@ -354,7 +357,7 @@ ipsetLoop:
 		if debugEnabled {
 			// This is a hot path so we prevent string allocation if debug is not enabled
 			m.logger.Debug("IP not in ipset, checking next",
-				zap.String("ip", clientIP),
+				zap.String("clientIp", clientIpStr),
 				zap.String("ipset", ipsetName),
 			)
 		}
@@ -364,7 +367,7 @@ ipsetLoop:
 	if debugEnabled {
 		// This is a hot path so we prevent string allocation if debug is not enabled
 		m.logger.Debug("IP not found in any ipset",
-			zap.String("ip", clientIP),
+			zap.String("clientIp", clientIpStr),
 			zap.Int("ipsets_checked", len(m.Ipsets)),
 		)
 	}
