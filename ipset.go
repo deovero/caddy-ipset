@@ -463,6 +463,9 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	// If module is closed, destroy the handle immediately
 	if atomic.LoadInt32(&m.closed) == 1 {
 		h.Close()
+		m.logger.Debug("discarded handle because module is closed",
+			zap.Uint64("instance_id", m.instanceID),
+		)
 		return
 	}
 
