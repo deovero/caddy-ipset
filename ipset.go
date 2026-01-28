@@ -5,6 +5,7 @@
 package caddy_ipset
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -56,8 +57,12 @@ var (
 
 // metricsStore holds Prometheus metrics for the ipset matcher.
 type metricsStore struct {
-	// mu protects all fields in this struct during initialization
-	mu sync.Mutex
+	// once ensures metrics are registered only once across all module instances
+	once sync.Once
+	// logger is used for logging unexpected errors during metric registration
+	logger *zap.Logger
+	// registerMutex protects all fields in this struct during initialization
+	registerMutex sync.Mutex
 	// registry stores the current metrics registry to detect registry changes on reload
 	registry prometheus.Registerer
 	// instances tracks the number of active IpsetMatcher instances
@@ -78,74 +83,108 @@ type metricsStore struct {
 // init initializes all Prometheus metrics with the given registry.
 // This method is safe to call multiple times and handles registry changes on Caddy reload.
 // When the registry changes (e.g., after a Caddy reload), metrics are re-registered with the new registry.
-func (m *metricsStore) init(registry prometheus.Registerer) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+func (m *metricsStore) init(registry prometheus.Registerer, logger *zap.Logger) {
+	m.logger = logger
+	m.once.Do(func() {
+		m.instances = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "module_instances",
+			Help:      "Number of ipset matcher module instances currently loaded",
+		})
+		m.instances.Set(0)
+
+		m.requestsTotal = promauto.NewCounter(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "requests_total",
+			Help:      "Total number of requests processed by the ipset matcher",
+		})
+
+		m.resultsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "results_total",
+			Help:      "ipset membership tests by ipset name and result",
+		}, []string{"ipset", "result"})
+
+		m.testDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "test_duration_seconds",
+			Help:      "Duration of ipset netlink tests by ipset name",
+			// Custom buckets for microsecond-level operations (10µs to 10ms range)
+			// Standard DefBuckets start at 5ms which is too coarse for netlink tests
+			Buckets: []float64{
+				0.00001, // 0.01ms 10µs 1e-05s
+				0.00005, // 0.05ms 50µs 5e-05s
+				0.0001,  // 0.1ms 100µs
+				0.00025, // 0.25ms 250µs
+				0.0005,  // 0.5ms 500µs
+				0.001,   // 1ms
+				0.0025,  // 2.5ms
+				0.005,   // 5ms
+				0.01,    // 10ms
+			},
+		}, []string{"ipset"})
+
+		m.handlesOpen = promauto.NewGauge(prometheus.GaugeOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "netlink_handles_open",
+			Help:      "Number of netlink handles currently open for ipset tests",
+		})
+		m.handlesOpen.Set(0)
+
+		m.errors = promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "errors_total",
+			Help:      "Total number of errors during ipset tests by error type",
+		}, []string{"error_type"})
+
+		m.logger.Debug("metrics initialized")
+	})
+
+	m.registerMutex.Lock()
+	defer m.registerMutex.Unlock()
 
 	// If we already registered with this exact registry, nothing to do
 	if m.registry == registry {
 		return
 	}
 
-	// Store the new registry for future comparison
+	// Store the new registry
 	m.registry = registry
 
-	m.instances = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-		Namespace: "caddy",
-		Subsystem: "http_matchers_ipset",
-		Name:      "module_instances",
-		Help:      "Number of ipset matcher module instances currently loaded",
-	})
-	m.instances.Set(0)
+	m.registerMetric(m.instances)
+	m.registerMetric(m.requestsTotal)
+	m.registerMetric(m.resultsTotal)
+	m.registerMetric(m.testDuration)
+	m.registerMetric(m.handlesOpen)
+	m.registerMetric(m.errors)
 
-	m.requestsTotal = promauto.With(registry).NewCounter(prometheus.CounterOpts{
-		Namespace: "caddy",
-		Subsystem: "http_matchers_ipset",
-		Name:      "requests_total",
-		Help:      "Total number of requests processed by the ipset matcher",
-	})
+	m.logger.Debug("metrics registered with new registry")
+}
 
-	m.resultsTotal = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
-		Namespace: "caddy",
-		Subsystem: "http_matchers_ipset",
-		Name:      "results_total",
-		Help:      "ipset membership tests by ipset name and result",
-	}, []string{"ipset", "result"})
-
-	m.testDuration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
-		Namespace: "caddy",
-		Subsystem: "http_matchers_ipset",
-		Name:      "test_duration_seconds",
-		Help:      "Duration of ipset netlink tests by ipset name",
-		// Custom buckets for microsecond-level operations (10µs to 10ms range)
-		// Standard DefBuckets start at 5ms which is too coarse for netlink tests
-		Buckets: []float64{
-			0.00001, // 0.01ms 10µs 1e-05s
-			0.00005, // 0.05ms 50µs 5e-05s
-			0.0001,  // 0.1ms 100µs
-			0.00025, // 0.25ms 250µs
-			0.0005,  // 0.5ms 500µs
-			0.001,   // 1ms
-			0.0025,  // 2.5ms
-			0.005,   // 5ms
-			0.01,    // 10ms
-		},
-	}, []string{"ipset"})
-
-	m.handlesOpen = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-		Namespace: "caddy",
-		Subsystem: "http_matchers_ipset",
-		Name:      "netlink_handles_open",
-		Help:      "Number of netlink handles currently open for ipset tests",
-	})
-	m.handlesOpen.Set(0)
-
-	m.errors = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
-		Namespace: "caddy",
-		Subsystem: "http_matchers_ipset",
-		Name:      "errors_total",
-		Help:      "Total number of errors during ipset tests by error type",
-	}, []string{"error_type"})
+// registerMetric registers a collector with the registry.
+// We ignore AlreadyRegisteredError since metrics may already be in this registry.
+func (m *metricsStore) registerMetric(c prometheus.Collector) {
+	if err := m.registry.Register(c); err != nil {
+		// Ignore if already registered (e.g., if registry is the default global registry)
+		if errors.Is(err, prometheus.AlreadyRegisteredError{
+			ExistingCollector: c,
+			NewCollector:      c,
+		}) {
+			return
+		}
+		// Log unexpected errors but don't fail. Metrics are nice-to-have.
+		// The module will still function when metrics registration fails.
+		m.logger.Error("unexpected error registering metric",
+			zap.String("collector_type", fmt.Sprintf("%T", c)),
+			zap.Error(err),
+		)
+	}
 }
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
@@ -240,8 +279,8 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Get the logger from Caddy's context
 	m.logger = ctx.Logger()
 
-	// Initialize metrics once
-	metrics.init(ctx.GetMetricsRegistry())
+	// Initialize metrics
+	metrics.init(ctx.GetMetricsRegistry(), m.logger)
 
 	// Generate a unique instance ID for this matcher instance
 	m.instanceID = fmt.Sprintf("%d.%d", os.Getpid(), atomic.AddUint64(&instanceCounter, 1))
