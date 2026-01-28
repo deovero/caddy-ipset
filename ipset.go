@@ -106,7 +106,17 @@ func (m *metricsStore) init(registry prometheus.Registerer) {
 			Help:      "Duration of ipset netlink tests by ipset name",
 			// Custom buckets for microsecond-level operations (10µs to 10ms range)
 			// Standard DefBuckets start at 5ms which is too coarse for netlink tests
-			Buckets: []float64{0.00001, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
+			Buckets: []float64{
+				0.00001, // 0.01ms 10µs 1e-05s
+				0.00005, // 0.05ms 50µs 5e-05s
+				0.0001,  // 0.1ms 100µs
+				0.00025, // 0.25ms 250µs
+				0.0005,  // 0.5ms 500µs
+				0.001,   // 1ms
+				0.0025,  // 2.5ms
+				0.005,   // 5ms
+				0.01,    // 10ms
+			},
 		}, []string{"ipset"})
 
 		m.handlesOpen = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
