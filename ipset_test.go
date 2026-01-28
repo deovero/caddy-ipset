@@ -5,6 +5,7 @@ package caddy_ipset
 import (
 	"context"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,8 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/vishvananda/netlink"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
@@ -1317,8 +1320,6 @@ func TestProvision_EmptyIpsetInList(t *testing.T) {
 	}
 }
 
-// TestProvision_VeryLongIpsetName tests that very long ipset names are rejected
-
 // TestPutHandle_NilHandle tests that putHandle safely handles nil handle
 func TestPutHandle_NilHandle(t *testing.T) {
 	m := &IpsetMatcher{
@@ -1506,5 +1507,259 @@ func TestPutHandle_PoolFull(t *testing.T) {
 	for _, h := range handles {
 		<-m.pool // Remove from pool
 		h.Close()
+	}
+}
+
+// TestMetrics_EndToEnd tests that Prometheus metrics are properly recorded
+// during ipset matching operations
+func TestMetrics_EndToEnd(t *testing.T) {
+	// Create a fresh matcher
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4"},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
+
+	// Verify metrics were initialized
+	if metrics.results == nil {
+		t.Fatal("Expected metrics.results to be initialized")
+	}
+	if metrics.duration == nil {
+		t.Fatal("Expected metrics.duration to be initialized")
+	}
+
+	// Helper to create a request with a specific client IP
+	makeRequest := func(clientIP string) *http.Request {
+		req := httptest.NewRequest("GET", "https://example.com", nil)
+		repl := caddyhttp.NewTestReplacer(req)
+		w := httptest.NewRecorder()
+		req = caddyhttp.PrepareRequest(req, repl, w, nil)
+		caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, clientIP)
+		return req
+	}
+
+	// Get initial counter values for the ipset
+	getResultCount := func(result string) float64 {
+		metric := &dto.Metric{}
+		counter, err := metrics.results.GetMetricWithLabelValues("test-ipset-v4", result)
+		if err != nil {
+			return 0
+		}
+		if err := counter.Write(metric); err != nil {
+			return 0
+		}
+		return metric.GetCounter().GetValue()
+	}
+
+	getDurationCount := func() uint64 {
+		metric := &dto.Metric{}
+		observer, err := metrics.duration.GetMetricWithLabelValues("test-ipset-v4")
+		if err != nil {
+			return 0
+		}
+		histogram := observer.(prometheus.Histogram)
+		if err := histogram.Write(metric); err != nil {
+			return 0
+		}
+		return metric.GetHistogram().GetSampleCount()
+	}
+
+	// Record initial values
+	initialFound := getResultCount("found")
+	initialNotFound := getResultCount("not found")
+	initialDurationCount := getDurationCount()
+
+	// Test 1: IP that IS in the ipset (should record "found")
+	// 192.168.100.1 should be in test-ipset-v4 based on setup-test-ipsets.sh
+	reqFound := makeRequest("192.168.100.1")
+	found, err := m.MatchWithError(reqFound)
+	if err != nil {
+		t.Errorf("Unexpected error for IP in ipset: %v", err)
+	}
+	if !found {
+		t.Skip("Skipping metrics verification - IP 192.168.100.1 not in test-ipset-v4")
+	}
+
+	// Verify "found" counter incremented
+	foundAfterMatch := getResultCount("found")
+	if foundAfterMatch != initialFound+1 {
+		t.Errorf("Expected 'found' counter to increment by 1, got delta: %v", foundAfterMatch-initialFound)
+	}
+
+	// Test 2: IP that is NOT in the ipset (should record "not found")
+	// 10.0.0.1 should NOT be in test-ipset-v4
+	reqNotFound := makeRequest("10.0.0.1")
+	found2, err := m.MatchWithError(reqNotFound)
+	if err != nil {
+		t.Errorf("Unexpected error for IP not in ipset: %v", err)
+	}
+	if found2 {
+		t.Skip("Skipping metrics verification - IP 10.0.0.1 unexpectedly in test-ipset-v4")
+	}
+
+	// Verify "not found" counter incremented
+	notFoundAfterMatch := getResultCount("not found")
+	if notFoundAfterMatch != initialNotFound+1 {
+		t.Errorf("Expected 'not found' counter to increment by 1, got delta: %v", notFoundAfterMatch-initialNotFound)
+	}
+
+	// Verify duration histogram recorded observations
+	durationCountAfterMatches := getDurationCount()
+	expectedDurationCount := initialDurationCount + 2 // Two matches performed
+	if durationCountAfterMatches != expectedDurationCount {
+		t.Errorf("Expected duration histogram sample count to be %d, got %d",
+			expectedDurationCount, durationCountAfterMatches)
+	}
+
+	// Verify duration values are reasonable (should be sub-millisecond for netlink calls)
+	metric := &dto.Metric{}
+	observer, _ := metrics.duration.GetMetricWithLabelValues("test-ipset-v4")
+	histogram := observer.(prometheus.Histogram)
+	if err := histogram.Write(metric); err == nil {
+		sum := metric.GetHistogram().GetSampleSum()
+		count := metric.GetHistogram().GetSampleCount()
+		if count > 0 {
+			avgDuration := sum / float64(count)
+			// Average duration should be less than 10ms for netlink calls
+			if avgDuration > 0.01 {
+				t.Errorf("Average duration seems too high: %v seconds", avgDuration)
+			}
+			t.Logf("Metrics working correctly - avg duration: %.6f seconds (%d samples)", avgDuration, count)
+		}
+	}
+}
+
+// TestMetrics_IPv6 tests that metrics work correctly for IPv6 ipsets
+func TestMetrics_IPv6(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v6"},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
+
+	// Helper to create a request with a specific client IP
+	makeRequest := func(clientIP string) *http.Request {
+		req := httptest.NewRequest("GET", "https://example.com", nil)
+		repl := caddyhttp.NewTestReplacer(req)
+		w := httptest.NewRecorder()
+		req = caddyhttp.PrepareRequest(req, repl, w, nil)
+		caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, clientIP)
+		return req
+	}
+
+	getResultCount := func(ipset, result string) float64 {
+		metric := &dto.Metric{}
+		counter, err := metrics.results.GetMetricWithLabelValues(ipset, result)
+		if err != nil {
+			return 0
+		}
+		if err := counter.Write(metric); err != nil {
+			return 0
+		}
+		return metric.GetCounter().GetValue()
+	}
+
+	initialFound := getResultCount("test-ipset-v6", "found")
+
+	// Test with an IPv6 address - should only check test-ipset-v6 (family optimization)
+	req := makeRequest("fd00::1")
+	found, err := m.MatchWithError(req)
+	if err != nil {
+		t.Errorf("Unexpected error: %v", err)
+	}
+	if !found {
+		t.Skip("Skipping - IPv6 address fd00::1 not in test-ipset-v6")
+	}
+
+	foundAfter := getResultCount("test-ipset-v6", "found")
+	if foundAfter != initialFound+1 {
+		t.Errorf("Expected 'found' counter to increment by 1 for IPv6, got delta: %v", foundAfter-initialFound)
+	}
+}
+
+// TestMetrics_MultipleIpsets tests metrics with multiple ipsets configured
+func TestMetrics_MultipleIpsets(t *testing.T) {
+	m := &IpsetMatcher{
+		Ipsets: []string{"test-ipset-v4", "test-ipset-v6"},
+	}
+
+	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
+	defer cancel()
+
+	err := m.Provision(ctx)
+	if err != nil {
+		t.Skipf("Skipping test - provisioning failed: %v", err)
+		return
+	}
+	defer func() {
+		if err := m.Cleanup(); err != nil {
+			t.Errorf("Cleanup failed: %v", err)
+		}
+	}()
+
+	makeRequest := func(clientIP string) *http.Request {
+		req := httptest.NewRequest("GET", "https://example.com", nil)
+		repl := caddyhttp.NewTestReplacer(req)
+		w := httptest.NewRecorder()
+		req = caddyhttp.PrepareRequest(req, repl, w, nil)
+		caddyhttp.SetVar(req.Context(), caddyhttp.ClientIPVarKey, clientIP)
+		return req
+	}
+
+	getDurationCount := func(ipset string) uint64 {
+		metric := &dto.Metric{}
+		observer, err := metrics.duration.GetMetricWithLabelValues(ipset)
+		if err != nil {
+			return 0
+		}
+		histogram := observer.(prometheus.Histogram)
+		if err := histogram.Write(metric); err != nil {
+			return 0
+		}
+		return metric.GetHistogram().GetSampleCount()
+	}
+
+	// Record initial duration counts for each ipset
+	initialV4Count := getDurationCount("test-ipset-v4")
+	initialV6Count := getDurationCount("test-ipset-v6")
+
+	// Test with an IPv4 address - should only check test-ipset-v4 (family optimization)
+	req := makeRequest("10.99.99.99")
+	_, _ = m.MatchWithError(req)
+
+	// Verify only the IPv4 ipset duration was recorded (due to family optimization)
+	v4CountAfter := getDurationCount("test-ipset-v4")
+	v6CountAfter := getDurationCount("test-ipset-v6")
+
+	if v4CountAfter != initialV4Count+1 {
+		t.Errorf("Expected test-ipset-v4 duration count to increment by 1, got delta: %d", v4CountAfter-initialV4Count)
+	}
+	// IPv6 ipset should NOT be checked for an IPv4 address due to family optimization
+	if v6CountAfter != initialV6Count {
+		t.Errorf("Expected test-ipset-v6 duration count to remain unchanged (family optimization), got delta: %d", v6CountAfter-initialV6Count)
 	}
 }
