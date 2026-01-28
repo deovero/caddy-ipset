@@ -9,11 +9,15 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/syndtr/gocapability/capability" // does not require CGo for libcap
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netlink/nl"
@@ -45,6 +49,13 @@ const (
 var (
 	// instanceCounter is a global counter for generating unique instance IDs
 	instanceCounter uint64
+
+	// metrics holds Prometheus metrics for the ipset matcher
+	metrics = struct {
+		once     sync.Once
+		results  *prometheus.CounterVec
+		duration *prometheus.HistogramVec
+	}{}
 )
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
@@ -103,9 +114,6 @@ type IpsetMatcher struct {
 	// closed is an atomic flag to indicate if the module is being cleaned up
 	closed int32
 
-	// matchCount is a counter for the number of times the matcher has been called
-	matchCount uint64
-
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
 }
@@ -144,6 +152,27 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 
 	// Get the logger from Caddy's context
 	m.logger = ctx.Logger()
+
+	// Initialize metrics once
+	registry := ctx.GetMetricsRegistry()
+	metrics.once.Do(func() {
+		metrics.results = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "results",
+			Help:      "IPset membership checks by ipset name and result",
+		}, []string{"ipset", "result"})
+
+		metrics.duration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "check_duration_seconds",
+			Help:      "Duration of IPset netlink checks by ipset name",
+			// Custom buckets for microsecond-level operations (10µs to 10ms range)
+			// DefBuckets start at 5ms which is too coarse for netlink checks
+			Buckets: []float64{0.00001, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
+		}, []string{"ipset"})
+	})
 
 	// Check if the Effective capabilities set contains CAP_NET_ADMIN
 	caps, err := capability.NewPid2(0)
@@ -244,7 +273,6 @@ drainLoop:
 
 	m.logger.Info("ipset matcher cleaned up",
 		zap.Int("closed_handles", count),
-		zap.Uint64("match_count", m.matchCount),
 		zap.String("instance_id", m.instanceID),
 	)
 
@@ -286,9 +314,6 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// We don't store it in the struct because it could change during the lifetime of the module, although
 	// it's very unlikely without a reload (which triggers a restart of the module).
 	debugEnabled := m.logger.Core().Enabled(zap.DebugLevel)
-
-	// Increment the match count for this instance
-	atomic.AddUint64(&m.matchCount, 1)
 
 	// Use Caddy's built-in client IP detection which respects trusted_proxies configuration
 	clientIpVar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
@@ -339,6 +364,8 @@ ipsetLoop:
 			continue ipsetLoop
 		}
 
+		start := time.Now()
+
 		// Actually test if the IP is in this ipset (reusing the entry allocation)
 		found, err := handle.IpsetTest(ipsetName, entry)
 		if err != nil {
@@ -348,25 +375,26 @@ ipsetLoop:
 			)
 		}
 
-		// OR logic: if found in ANY ipset, return true immediately
+		duration := time.Since(start).Seconds()
+		metrics.duration.WithLabelValues(ipsetName).Observe(duration)
+
+		resultLabel := "not found"
 		if found {
-			if debugEnabled {
-				// This is a hot path so we prevent string allocation if debug is not enabled
-				m.logger.Debug("IP matched in ipset",
-					zap.String("clientIp", clientIpStr),
-					zap.String("ipset", ipsetName),
-				)
-			}
-			return true, nil
+			resultLabel = "found"
 		}
 
-		// Not found in this ipset, continue to check the next one
 		if debugEnabled {
 			// This is a hot path so we prevent string allocation if debug is not enabled
-			m.logger.Debug("IP not in ipset, checking next",
+			m.logger.Debug(fmt.Sprintf("IP %s in ipset", resultLabel),
 				zap.String("clientIp", clientIpStr),
 				zap.String("ipset", ipsetName),
 			)
+		}
+		metrics.results.WithLabelValues(ipsetName, resultLabel).Inc()
+
+		// OR logic: if found in ANY ipset, return true immediately
+		if found {
+			return true, nil
 		}
 	}
 

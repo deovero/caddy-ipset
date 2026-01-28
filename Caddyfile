@@ -1,5 +1,5 @@
 {
-	admin off
+	admin :20019
 	log {
 		level DEBUG
 	}
