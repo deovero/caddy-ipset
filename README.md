@@ -12,10 +12,34 @@ This enables efficient filtering against large, dynamic sets of IPs and CIDR ran
 - Comprehensive logging for debugging and monitoring
 - Simple Caddyfile configuration
 - Comprehensive unit tests
+- Prometheus metrics for observability
+
+## Prometheus Metrics
+
+The module exposes the following Prometheus metrics for monitoring and observability:
+
+| Metric | Type | Labels | Description                                                              |
+|--------|------|--------|--------------------------------------------------------------------------|
+| `caddy_http_matchers_ipset_module_instances` | Gauge | - | Number of ipset matcher module instances currently loaded                |
+| `caddy_http_matchers_ipset_requests_total` | Counter | - | Total number of requests processed by the ipset matcher                  |
+| `caddy_http_matchers_ipset_results_total` | Counter | `ipset`, `result` | IPset membership tests by ipset name and result (`found` or `not_found`) |
+| `caddy_http_matchers_ipset_test_duration_seconds` | Histogram | `ipset` | Duration of ipset netlink tests by ipset name                            |
+| `caddy_http_matchers_ipset_netlink_handles_open` | Gauge | - | Number of netlink handles currently open for ipset tests                 |
+| `caddy_http_matchers_ipset_errors_total` | Counter | `error_type` | Total number of errors during ipset tests by error type                  |
+
+These metrics are automatically exposed via Caddy's admin API when the Prometheus metrics endpoint is enabled:
+
+```caddyfile
+{
+    admin :2019
+}
+```
+
+Metrics are then available at `http://localhost:2019/metrics`.
 
 ## How It Works
 
-This module integrates with Caddy's request matcher system to check if a client's IP address is present in a specified Linux ipset.
+This module integrates with Caddy's request matcher system to test if a client's IP address is present in a specified Linux ipset.
 
 The module uses the `vishvananda/netlink` library to communicate directly with the Linux kernel via netlink, providing native, high-performance ipset lookups without spawning external processes. This requires the CAP_NET_ADMIN capability.
 
@@ -190,7 +214,7 @@ Error: loading matcher modules: module name 'ipset': provision http.matchers.ips
 
 **Error message:**
 ```
-Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: error checking ipset 'X': no such file or directory
+Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: error validating ipset 'X': no such file or directory
 ```
 
 **Cause**: The ipset list doesn't exist or Caddy cannot access it.
@@ -209,7 +233,7 @@ Error: ... loading matcher modules: module name 'ipset': provision http.matchers
 
 **Error message:**
 ```
-Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: error checking ipset 'X': operation not permitted
+Error: ... loading matcher modules: module name 'ipset': provision http.matchers.ipset: error validating ipset 'X': operation not permitted
 ```
 
 **Cause**: Caddy can't access the ipset due to insufficient permissions or systemd sandboxing.
@@ -282,7 +306,7 @@ Error: ... at least one ipset name is required
    ```
 2. Check the logs for messages like:
    ```
-   DEBUG   IP matched in ipset    {"ip": "192.168.1.100", "ipset": "blocklist-v4"}
+   Tested IP against ipset {"clientIp": "192.168.1.100", "ipset": "test-ipset-v4", "result": "found"}
    ```
 3. Configure `trusted_proxies` to extract the real client IP from proxy headers:
    ```caddyfile

@@ -105,17 +105,17 @@ ipset add test-ipset-v4 192.168.1.100
   ./caddy run & sleep 2
   curl localhost:20019/metrics | grep ipset
   echo -e "\n\nShould match:"
-  curl http://127.0.0.1:20080
+  curl -s http://127.0.0.1:20080
   echo -e "\n\nShould match:"
-  curl http://[::1]:20080
+  curl -s http://[::1]:20080
   echo -e "\n\nShould NOT match:"
-  curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.1'
+  curl -s http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.1'
   echo -e "\n\nShould match:"
-  curl http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
+  curl -s http://127.0.0.1:20080 --header 'X-Forwarded-For: 192.168.1.100'
   echo -e "\n\nShould match:"
-  curl http://127.0.0.1:20080 --header 'X-Forwarded-For: ::ffff:192.168.1.100'
+  curl -s http://127.0.0.1:20080 --header 'X-Forwarded-For: ::ffff:192.168.1.100'
   echo -e "\n"
-  curl localhost:20019/metrics | grep ipset
+  curl -s localhost:20019/metrics | grep ipset
   echo -e "\n"
 }
 for i in $(seq 1 10000); do curl -s -o /dev/null http://127.0.0.1:20080; done

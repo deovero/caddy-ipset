@@ -51,12 +51,72 @@ var (
 	instanceCounter uint64
 
 	// metrics holds Prometheus metrics for the ipset matcher
-	metrics = struct {
-		once     sync.Once
-		results  *prometheus.CounterVec
-		duration *prometheus.HistogramVec
-	}{}
+	metrics metricsStore
 )
+
+// metricsStore holds Prometheus metrics for the ipset matcher
+type metricsStore struct {
+	once          sync.Once
+	instances     prometheus.Gauge
+	requestsTotal prometheus.Counter
+	resultsTotal  *prometheus.CounterVec
+	duration      *prometheus.HistogramVec
+	handles       prometheus.Gauge
+	errors        *prometheus.CounterVec
+}
+
+// init initializes all Prometheus metrics with the given registry.
+// This method is safe to call multiple times; initialization only happens once.
+func (m *metricsStore) init(registry prometheus.Registerer) {
+	m.once.Do(func() {
+		m.instances = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "module_instances",
+			Help:      "Number of ipset matcher module instances currently loaded",
+		})
+		m.instances.Set(0)
+
+		m.requestsTotal = promauto.With(registry).NewCounter(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "requests_total",
+			Help:      "Total number of requests processed by the ipset matcher",
+		})
+
+		m.resultsTotal = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "results_total",
+			Help:      "ipset membership tests by ipset name and result",
+		}, []string{"ipset", "result"})
+
+		m.duration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "test_duration_seconds",
+			Help:      "Duration of ipset netlink tests by ipset name",
+			// Custom buckets for microsecond-level operations (10µs to 10ms range)
+			// Standard DefBuckets start at 5ms which is too coarse for netlink tests
+			Buckets: []float64{0.00001, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
+		}, []string{"ipset"})
+
+		m.handles = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "netlink_handles_open",
+			Help:      "Number of netlink handles currently open for ipset tests",
+		})
+		m.handles.Set(0)
+
+		m.errors = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+			Namespace: "caddy",
+			Subsystem: "http_matchers_ipset",
+			Name:      "errors_total",
+			Help:      "Total number of errors during ipset tests by error type",
+		}, []string{"error_type"})
+	})
+}
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
 // This enables efficient filtering against large, dynamic sets of IPs and CIDR ranges.
@@ -67,7 +127,7 @@ var (
 //   - Existing ipset list created via the `ipset` command
 //
 // Supports both IPv4 and IPv6 ipsets, performing validation during initialization.
-// Protocol mismatches (e.g., checking an IPv4 address against an IPv6 set) return false.
+// Protocol mismatches (e.g., testing an IPv4 address against an IPv6 set) return false.
 //
 // If multiple ipsets are configured, the matcher applies OR logic: it returns true
 // if the IP is found in *any* of the provided sets.
@@ -147,32 +207,15 @@ func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
 //   - Netlink handle creation fails
 //   - The ipset doesn't exist or cannot be accessed
 func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
-	// Generate a unique instance ID for this matcher instance
-	m.instanceID = fmt.Sprintf("%d.%d", os.Getpid(), atomic.AddUint64(&instanceCounter, 1))
-
 	// Get the logger from Caddy's context
 	m.logger = ctx.Logger()
 
 	// Initialize metrics once
-	registry := ctx.GetMetricsRegistry()
-	metrics.once.Do(func() {
-		metrics.results = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "results",
-			Help:      "IPset membership checks by ipset name and result",
-		}, []string{"ipset", "result"})
+	metrics.init(ctx.GetMetricsRegistry())
 
-		metrics.duration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "check_duration_seconds",
-			Help:      "Duration of IPset netlink checks by ipset name",
-			// Custom buckets for microsecond-level operations (10µs to 10ms range)
-			// DefBuckets start at 5ms which is too coarse for netlink checks
-			Buckets: []float64{0.00001, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
-		}, []string{"ipset"})
-	})
+	// Generate a unique instance ID for this matcher instance
+	m.instanceID = fmt.Sprintf("%d.%d", os.Getpid(), atomic.AddUint64(&instanceCounter, 1))
+	metrics.instances.Inc()
 
 	// Check if the Effective capabilities set contains CAP_NET_ADMIN
 	caps, err := capability.NewPid2(0)
@@ -203,6 +246,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Create a temporary handle just for ipset access validation.
 	// We do not use the pool here to ensure deterministic startup behavior.
 	handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+	metrics.handles.Inc()
 	if err != nil {
 		m.logger.Error("failed to create netlink handle for ipset validation",
 			zap.Error(err),
@@ -210,7 +254,10 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		)
 		return err
 	}
-	defer handle.Close()
+	defer func() {
+		handle.Close()
+		metrics.handles.Dec()
+	}()
 
 	// Validate each ipset and store its family information
 	for i, ipsetName := range m.Ipsets {
@@ -226,7 +273,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		// Verify the ipset exists using netlink
 		result, err := handle.IpsetList(ipsetName)
 		if err != nil {
-			return fmt.Errorf("error checking ipset '%s': %w", ipsetName, err)
+			return fmt.Errorf("error validating ipset '%s': %w", ipsetName, err)
 		}
 
 		// Store the family information for this ipset
@@ -263,6 +310,7 @@ drainLoop:
 		case handle := <-m.pool:
 			if handle != nil {
 				handle.Close()
+				metrics.handles.Dec()
 				count++
 			}
 		default:
@@ -275,6 +323,7 @@ drainLoop:
 		zap.Int("closed_handles", count),
 		zap.String("instance_id", m.instanceID),
 	)
+	metrics.instances.Dec()
 
 	return nil
 }
@@ -308,8 +357,12 @@ drainLoop:
 // We don't want to silently ignore errors here because this has security implications.
 //
 // We ignore context cancellation (e.g., client disconnects) to avoid logging an
-// unnecessary error. It is not that expensive to complete checking the ipsets.
+// unnecessary error. It is not that expensive to complete testing the ipsets for a
+// single request.
 func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
+	// Track total requests processed
+	metrics.requestsTotal.Inc()
+
 	// Performance optimization: Check if debug is enabled and cache it during the processing of this request.
 	// We don't store it in the struct because it could change during the lifetime of the module, although
 	// it's very unlikely without a reload (which triggers a restart of the module).
@@ -356,7 +409,7 @@ ipsetLoop:
 			if debugEnabled {
 				// This is a hot path so we prevent string allocation if debug is not enabled
 				m.logger.Debug(
-					fmt.Sprintf("skipped matching of IPv%d address against IPv%d ipset", ipFamily, ipsetFamily),
+					fmt.Sprintf("skipped testing of IPv%d address against IPv%d ipset", ipFamily, ipsetFamily),
 					zap.String("ip", clientIpStr),
 					zap.String("ipset", ipsetName),
 				)
@@ -369,6 +422,7 @@ ipsetLoop:
 		// Actually test if the IP is in this ipset (reusing the entry allocation)
 		found, err := handle.IpsetTest(ipsetName, entry)
 		if err != nil {
+			metrics.errors.WithLabelValues("ipset_test_failed").Inc()
 			return false, fmt.Errorf(
 				"error testing IP '%s' against ipset '%s': %w [instance_id=%s]",
 				clientIpStr, ipsetName, err, m.instanceID,
@@ -378,19 +432,20 @@ ipsetLoop:
 		duration := time.Since(start).Seconds()
 		metrics.duration.WithLabelValues(ipsetName).Observe(duration)
 
-		resultLabel := "not found"
+		resultLabel := "not_found"
 		if found {
 			resultLabel = "found"
 		}
 
 		if debugEnabled {
 			// This is a hot path so we prevent string allocation if debug is not enabled
-			m.logger.Debug(fmt.Sprintf("IP %s in ipset", resultLabel),
+			m.logger.Debug(fmt.Sprintf("Tested IP against ipset"),
 				zap.String("clientIp", clientIpStr),
 				zap.String("ipset", ipsetName),
+				zap.String("result", resultLabel),
 			)
 		}
-		metrics.results.WithLabelValues(ipsetName, resultLabel).Inc()
+		metrics.resultsTotal.WithLabelValues(ipsetName, resultLabel).Inc()
 
 		// OR logic: if found in ANY ipset, return true immediately
 		if found {
@@ -403,7 +458,7 @@ ipsetLoop:
 		// This is a hot path so we prevent string allocation if debug is not enabled
 		m.logger.Debug("IP not found in any ipset",
 			zap.String("clientIp", clientIpStr),
-			zap.Int("ipsets_checked", len(m.Ipsets)),
+			zap.Int("ipsets_tested_against", len(m.Ipsets)),
 		)
 	}
 	return false, nil
@@ -438,7 +493,7 @@ ipsetLoop:
 //
 // ```
 //
-// This creates a single matcher that checks if the client IP is in ANY of the
+// This creates a single matcher that tests if the client IP is in ANY of the
 // specified ipsets (OR logic).
 func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	// Process all ipset directives in the matcher block
@@ -459,6 +514,7 @@ func (m *IpsetMatcher) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 // If the pool is empty, it creates a new handle.
 func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 	if m.pool == nil {
+		metrics.errors.WithLabelValues("pool_not_initialized").Inc()
 		return nil, fmt.Errorf(
 			"netlink handle pool not initialized - matcher not properly provisioned [instance_id=%s]",
 			m.instanceID,
@@ -472,7 +528,9 @@ func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 	default:
 		// Pool was empty when select executed, create a fresh handle
 		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
+		metrics.handles.Inc()
 		if err != nil {
+			metrics.errors.WithLabelValues("handle_creation_failed").Inc()
 			return nil, fmt.Errorf(
 				"failed to create new netlink handle [instance_id=%s]: %w",
 				m.instanceID, err,
@@ -495,6 +553,7 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	// If module is closed, destroy the handle immediately
 	if atomic.LoadInt32(&m.closed) == 1 {
 		h.Close()
+		metrics.handles.Dec()
 		m.logger.Debug("discarded handle because module is closed",
 			zap.String("instance_id", m.instanceID),
 		)
@@ -512,6 +571,7 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 			zap.String("instance_id", m.instanceID),
 		)
 		h.Close()
+		metrics.handles.Dec()
 	}
 }
 
