@@ -54,15 +54,23 @@ var (
 	metrics metricsStore
 )
 
-// metricsStore holds Prometheus metrics for the ipset matcher
+// metricsStore holds Prometheus metrics for the ipset matcher.
 type metricsStore struct {
-	once          sync.Once
-	instances     prometheus.Gauge
+	// once ensures metrics are registered only once across all module instances
+	once sync.Once
+	// instances tracks the number of active IpsetMatcher instances
+	instances prometheus.Gauge
+	// requestsTotal counts all requests processed by the matcher
 	requestsTotal prometheus.Counter
-	resultsTotal  *prometheus.CounterVec
-	duration      *prometheus.HistogramVec
-	handles       prometheus.Gauge
-	errors        *prometheus.CounterVec
+	// resultsTotal counts ipset test results by ipset name and outcome (found/not_found)
+	resultsTotal *prometheus.CounterVec
+	// testDuration records the duration of individual ipset netlink tests
+	testDuration *prometheus.HistogramVec
+	// handlesOpen tracks the number of currently open netlink handles
+	handlesOpen prometheus.Gauge
+	// errors counts errors by type during normal operation
+	// We only store errors occurring during normal operation, not provision and cleanup.
+	errors *prometheus.CounterVec
 }
 
 // init initializes all Prometheus metrics with the given registry.
@@ -91,7 +99,7 @@ func (m *metricsStore) init(registry prometheus.Registerer) {
 			Help:      "ipset membership tests by ipset name and result",
 		}, []string{"ipset", "result"})
 
-		m.duration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
+		m.testDuration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: "caddy",
 			Subsystem: "http_matchers_ipset",
 			Name:      "test_duration_seconds",
@@ -101,13 +109,13 @@ func (m *metricsStore) init(registry prometheus.Registerer) {
 			Buckets: []float64{0.00001, 0.00005, 0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01},
 		}, []string{"ipset"})
 
-		m.handles = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+		m.handlesOpen = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
 			Namespace: "caddy",
 			Subsystem: "http_matchers_ipset",
 			Name:      "netlink_handles_open",
 			Help:      "Number of netlink handles currently open for ipset tests",
 		})
-		m.handles.Set(0)
+		m.handlesOpen.Set(0)
 
 		m.errors = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
 			Namespace: "caddy",
@@ -179,7 +187,7 @@ type IpsetMatcher struct {
 }
 
 // CaddyModule returns the Caddy module information.
-// must have a value receiver so it can be called from a pointer.
+// It uses a value receiver (required by Caddy) so it can be called from a pointer.
 //
 // noinspection GoMixedReceiverTypes
 func (IpsetMatcher) CaddyModule() caddy.ModuleInfo {
@@ -248,7 +256,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Create a temporary handle just for ipset access validation.
 	// We do not use the pool here to ensure deterministic startup behavior.
 	handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
-	metrics.handles.Inc()
+	metrics.handlesOpen.Inc()
 	if err != nil {
 		m.logger.Error("failed to create netlink handle for ipset validation",
 			zap.Error(err),
@@ -258,7 +266,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	}
 	defer func() {
 		handle.Close()
-		metrics.handles.Dec()
+		metrics.handlesOpen.Dec()
 	}()
 
 	// Validate each ipset and store its family information
@@ -291,6 +299,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 
 	m.logger.Info("ipset matcher provisioned",
 		zap.String("instance_id", m.instanceID),
+		zap.Int("ipset_count", len(m.Ipsets)),
 	)
 
 	return nil
@@ -312,7 +321,7 @@ drainLoop:
 		case handle := <-m.pool:
 			if handle != nil {
 				handle.Close()
-				metrics.handles.Dec()
+				metrics.handlesOpen.Dec()
 				count++
 			}
 		default:
@@ -374,11 +383,13 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	clientIpVar := caddyhttp.GetVar(req.Context(), caddyhttp.ClientIPVarKey)
 	if clientIpVar == nil {
 		// Maybe this can happen if the users trusted_proxies configuration is wrong?
+		metrics.errors.WithLabelValues("client_ip_field_not_found").Inc()
 		return false, fmt.Errorf("%s not found in request context", caddyhttp.ClientIPVarKey)
 	}
 	clientIpStr, ok := clientIpVar.(string)
 	if !ok {
 		// Should not happen because Caddy always sets this to a string
+		metrics.errors.WithLabelValues("client_ip_not_a_string").Inc()
 		return false, fmt.Errorf("%s is not a string but a %T", caddyhttp.ClientIPVarKey, clientIpVar)
 	}
 
@@ -386,6 +397,7 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	clientIp := net.ParseIP(clientIpStr)
 	if clientIp == nil {
 		// Should not happen because Caddy's client IP detection should have already validated it
+		metrics.errors.WithLabelValues("invalid_ip_address").Inc()
 		return false, fmt.Errorf("invalid IP address format '%s'", clientIpStr)
 	}
 
@@ -432,7 +444,7 @@ ipsetLoop:
 		}
 
 		duration := time.Since(start).Seconds()
-		metrics.duration.WithLabelValues(ipsetName).Observe(duration)
+		metrics.testDuration.WithLabelValues(ipsetName).Observe(duration)
 
 		resultLabel := "not_found"
 		if found {
@@ -530,7 +542,7 @@ func (m *IpsetMatcher) getHandle() (*netlink.Handle, error) {
 	default:
 		// Pool was empty when select executed, create a fresh handle
 		handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
-		metrics.handles.Inc()
+		metrics.handlesOpen.Inc()
 		if err != nil {
 			metrics.errors.WithLabelValues("handle_creation_failed").Inc()
 			return nil, fmt.Errorf(
@@ -555,7 +567,7 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 	// If module is closed, destroy the handle immediately
 	if atomic.LoadInt32(&m.closed) == 1 {
 		h.Close()
-		metrics.handles.Dec()
+		metrics.handlesOpen.Dec()
 		m.logger.Debug("discarded handle because module is closed",
 			zap.String("instance_id", m.instanceID),
 		)
@@ -573,7 +585,7 @@ func (m *IpsetMatcher) putHandle(h *netlink.Handle) {
 			zap.String("instance_id", m.instanceID),
 		)
 		h.Close()
-		metrics.handles.Dec()
+		metrics.handlesOpen.Dec()
 	}
 }
 

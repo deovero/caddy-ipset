@@ -14,29 +14,6 @@ This enables efficient filtering against large, dynamic sets of IPs and CIDR ran
 - Comprehensive unit tests
 - Prometheus metrics for observability
 
-## Prometheus Metrics
-
-The module exposes the following Prometheus metrics for monitoring and observability:
-
-| Metric | Type | Labels | Description                                                              |
-|--------|------|--------|--------------------------------------------------------------------------|
-| `caddy_http_matchers_ipset_module_instances` | Gauge | - | Number of ipset matcher module instances currently loaded                |
-| `caddy_http_matchers_ipset_requests_total` | Counter | - | Total number of requests processed by the ipset matcher                  |
-| `caddy_http_matchers_ipset_results_total` | Counter | `ipset`, `result` | IPset membership tests by ipset name and result (`found` or `not_found`) |
-| `caddy_http_matchers_ipset_test_duration_seconds` | Histogram | `ipset` | Duration of ipset netlink tests by ipset name                            |
-| `caddy_http_matchers_ipset_netlink_handles_open` | Gauge | - | Number of netlink handles currently open for ipset tests                 |
-| `caddy_http_matchers_ipset_errors_total` | Counter | `error_type` | Total number of errors during ipset tests by error type                  |
-
-These metrics are automatically exposed via Caddy's admin API when the Prometheus metrics endpoint is enabled:
-
-```caddyfile
-{
-    admin :2019
-}
-```
-
-Metrics are then available at `http://localhost:2019/metrics`.
-
 ## How It Works
 
 This module integrates with Caddy's request matcher system to test if a client's IP address is present in a specified Linux ipset.
@@ -155,6 +132,29 @@ This module works with various ipset types:
 This module works with both IP families:
 - `inet` - IPv4
 - `inet6` - IPv6
+
+## Prometheus Metrics
+
+The module exposes the following Prometheus metrics for monitoring and observability:
+
+| Metric | Type | Labels | Description                                                              |
+|--------|------|--------|--------------------------------------------------------------------------|
+| `caddy_http_matchers_ipset_module_instances` | Gauge | - | Number of ipset matcher module instances currently loaded                |
+| `caddy_http_matchers_ipset_requests_total` | Counter | - | Total number of requests processed by the ipset matcher                  |
+| `caddy_http_matchers_ipset_results_total` | Counter | `ipset`, `result` | IPset membership tests by ipset name and result (`found` or `not_found`) |
+| `caddy_http_matchers_ipset_test_duration_seconds` | Histogram | `ipset` | Duration of ipset netlink tests by ipset name                            |
+| `caddy_http_matchers_ipset_netlink_handles_open` | Gauge | - | Number of netlink handles currently open for ipset tests                 |
+| `caddy_http_matchers_ipset_errors_total` | Counter | `error_type` | Total number of errors during ipset tests by error type                  |
+
+These metrics are automatically exposed via Caddy's admin API when the Prometheus metrics endpoint is enabled:
+
+```caddyfile
+{
+    admin :2019
+}
+```
+
+Metrics are then available at `http://localhost:2019/metrics`.
 
 ## Testing
 

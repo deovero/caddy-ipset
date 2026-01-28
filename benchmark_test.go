@@ -69,7 +69,7 @@ func getMatcher(t testing.TB) *IpsetMatcher {
 	ctx, cancel := caddy.NewContext(caddy.Context{Context: context.Background()})
 	t.Cleanup(func() { cancel() })
 
-	// Provision the matcher (opens initial handles)
+	// Provision the matcher (opens initial handlesOpen)
 	if err := m.Provision(ctx); err != nil {
 		t.Fatalf("Provision failed: %v", err)
 	}
@@ -134,7 +134,7 @@ func BenchmarkMatchMiss(b *testing.B) {
 
 // BenchmarkMatchParallel stresses the connection pool (leaky bucket).
 // It runs concurrent goroutines to ensure the channel pool works efficiently
-// and we don't leak socket handles.
+// and we don't leak socket handlesOpen.
 func BenchmarkMatchParallel(b *testing.B) {
 	setupBenchmarks(b)
 	m := getMatcher(b)

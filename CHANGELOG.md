@@ -8,16 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Removed
+
+### Changed
+
+### Fixed
+
+### Testing
+
+### Documentation
+
+## [v0.5.0]
+
+### Added
 - Prometheus metrics
 
 ### Changed
 - Prepend InstanceID with pid of Caddy process
 - Improved debug logging of handler pool
-- Enabled admin in Caddyfile used for testing
 - Increased max handler pool size from 128 to 512
 
 ### Testing
-- Increased test coverage to 94.1%
+- Increased test coverage to 93.6%
+- Enabled admin in Caddyfile used for testing
 - Added tests for Prometheus metrics
 
 ## [v0.4.8]

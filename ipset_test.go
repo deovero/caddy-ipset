@@ -622,11 +622,11 @@ func TestMetrics(t *testing.T) {
 	if metrics.resultsTotal == nil {
 		t.Fatal("Expected metrics.resultsTotal to be initialized")
 	}
-	if metrics.duration == nil {
-		t.Fatal("Expected metrics.duration to be initialized")
+	if metrics.testDuration == nil {
+		t.Fatal("Expected metrics.testDuration to be initialized")
 	}
-	if metrics.handles == nil {
-		t.Fatal("Expected metrics.handles to be initialized")
+	if metrics.handlesOpen == nil {
+		t.Fatal("Expected metrics.handlesOpen to be initialized")
 	}
 	if metrics.errors == nil {
 		t.Fatal("Expected metrics.errors to be initialized")
@@ -655,7 +655,7 @@ func TestMetrics(t *testing.T) {
 
 	getDurationCount := func(ipset string) uint64 {
 		metric := &dto.Metric{}
-		observer, err := metrics.duration.GetMetricWithLabelValues(ipset)
+		observer, err := metrics.testDuration.GetMetricWithLabelValues(ipset)
 		if err != nil {
 			return 0
 		}
@@ -686,13 +686,13 @@ func TestMetrics(t *testing.T) {
 		t.Errorf("Expected resultsTotal[test-ipset-v4, not_found] to increment by 1, got delta: %v", delta)
 	}
 
-	// Verify duration histogram recorded for v4 ipset
+	// Verify testDuration histogram recorded for v4 ipset
 	if delta := getDurationCount("test-ipset-v4") - initialV4DurationCount; delta != 1 {
-		t.Errorf("Expected v4 duration count to increment by 1, got delta: %d", delta)
+		t.Errorf("Expected v4 testDuration count to increment by 1, got delta: %d", delta)
 	}
 
-	// Verify v6 duration unchanged due to family optimization
+	// Verify v6 testDuration unchanged due to family optimization
 	if delta := getDurationCount("test-ipset-v6") - initialV6DurationCount; delta != 0 {
-		t.Errorf("Expected v6 duration count to remain unchanged (family optimization), got delta: %d", delta)
+		t.Errorf("Expected v6 testDuration count to remain unchanged (family optimization), got delta: %d", delta)
 	}
 }
