@@ -236,9 +236,11 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	}
 
 	// Initialize the channel pool.
-	// 128 is a safe buffer size to handle concurrent bursts without
+	// 512 is a safe buffer size to handle concurrent bursts without
 	// constantly creating/destroying sockets, while keeping memory usage low.
-	m.pool = make(chan *netlink.Handle, 128)
+	// This pool won't be allocated, it is just a store for reusable handles.
+	// The number is the maximum number of idle handles we keep around.
+	m.pool = make(chan *netlink.Handle, 512)
 
 	// Pre-allocate ipsetFamilyVersions slice with known length
 	m.ipsetFamilyVersions = make([]uint8, len(m.Ipsets))

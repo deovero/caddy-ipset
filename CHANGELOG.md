@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prepend InstanceID with pid of Caddy process
 - Improved debug logging of handler pool
 - Enabled admin in Caddyfile used for testing
+- Increased max handler pool size from 128 to 512
 
 ### Testing
 - Increased test coverage to 94.1%
