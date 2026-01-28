@@ -56,8 +56,10 @@ var (
 
 // metricsStore holds Prometheus metrics for the ipset matcher.
 type metricsStore struct {
-	// once ensures metrics are registered only once across all module instances
-	once sync.Once
+	// mu protects all fields in this struct during initialization
+	mu sync.Mutex
+	// registry stores the current metrics registry to detect registry changes on reload
+	registry prometheus.Registerer
 	// instances tracks the number of active IpsetMatcher instances
 	instances prometheus.Gauge
 	// requestsTotal counts all requests processed by the matcher
@@ -74,66 +76,76 @@ type metricsStore struct {
 }
 
 // init initializes all Prometheus metrics with the given registry.
-// This method is safe to call multiple times; initialization only happens once.
+// This method is safe to call multiple times and handles registry changes on Caddy reload.
+// When the registry changes (e.g., after a Caddy reload), metrics are re-registered with the new registry.
 func (m *metricsStore) init(registry prometheus.Registerer) {
-	m.once.Do(func() {
-		m.instances = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "module_instances",
-			Help:      "Number of ipset matcher module instances currently loaded",
-		})
-		m.instances.Set(0)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-		m.requestsTotal = promauto.With(registry).NewCounter(prometheus.CounterOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "requests_total",
-			Help:      "Total number of requests processed by the ipset matcher",
-		})
+	// If we already registered with this exact registry, nothing to do
+	if m.registry == registry {
+		return
+	}
 
-		m.resultsTotal = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "results_total",
-			Help:      "ipset membership tests by ipset name and result",
-		}, []string{"ipset", "result"})
+	// Store the new registry for future comparison
+	m.registry = registry
 
-		m.testDuration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "test_duration_seconds",
-			Help:      "Duration of ipset netlink tests by ipset name",
-			// Custom buckets for microsecond-level operations (10µs to 10ms range)
-			// Standard DefBuckets start at 5ms which is too coarse for netlink tests
-			Buckets: []float64{
-				0.00001, // 0.01ms 10µs 1e-05s
-				0.00005, // 0.05ms 50µs 5e-05s
-				0.0001,  // 0.1ms 100µs
-				0.00025, // 0.25ms 250µs
-				0.0005,  // 0.5ms 500µs
-				0.001,   // 1ms
-				0.0025,  // 2.5ms
-				0.005,   // 5ms
-				0.01,    // 10ms
-			},
-		}, []string{"ipset"})
-
-		m.handlesOpen = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "netlink_handles_open",
-			Help:      "Number of netlink handles currently open for ipset tests",
-		})
-		m.handlesOpen.Set(0)
-
-		m.errors = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
-			Namespace: "caddy",
-			Subsystem: "http_matchers_ipset",
-			Name:      "errors_total",
-			Help:      "Total number of errors during ipset tests by error type",
-		}, []string{"error_type"})
+	m.instances = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+		Namespace: "caddy",
+		Subsystem: "http_matchers_ipset",
+		Name:      "module_instances",
+		Help:      "Number of ipset matcher module instances currently loaded",
 	})
+	m.instances.Set(0)
+
+	m.requestsTotal = promauto.With(registry).NewCounter(prometheus.CounterOpts{
+		Namespace: "caddy",
+		Subsystem: "http_matchers_ipset",
+		Name:      "requests_total",
+		Help:      "Total number of requests processed by the ipset matcher",
+	})
+
+	m.resultsTotal = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+		Namespace: "caddy",
+		Subsystem: "http_matchers_ipset",
+		Name:      "results_total",
+		Help:      "ipset membership tests by ipset name and result",
+	}, []string{"ipset", "result"})
+
+	m.testDuration = promauto.With(registry).NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "caddy",
+		Subsystem: "http_matchers_ipset",
+		Name:      "test_duration_seconds",
+		Help:      "Duration of ipset netlink tests by ipset name",
+		// Custom buckets for microsecond-level operations (10µs to 10ms range)
+		// Standard DefBuckets start at 5ms which is too coarse for netlink tests
+		Buckets: []float64{
+			0.00001, // 0.01ms 10µs 1e-05s
+			0.00005, // 0.05ms 50µs 5e-05s
+			0.0001,  // 0.1ms 100µs
+			0.00025, // 0.25ms 250µs
+			0.0005,  // 0.5ms 500µs
+			0.001,   // 1ms
+			0.0025,  // 2.5ms
+			0.005,   // 5ms
+			0.01,    // 10ms
+		},
+	}, []string{"ipset"})
+
+	m.handlesOpen = promauto.With(registry).NewGauge(prometheus.GaugeOpts{
+		Namespace: "caddy",
+		Subsystem: "http_matchers_ipset",
+		Name:      "netlink_handles_open",
+		Help:      "Number of netlink handles currently open for ipset tests",
+	})
+	m.handlesOpen.Set(0)
+
+	m.errors = promauto.With(registry).NewCounterVec(prometheus.CounterOpts{
+		Namespace: "caddy",
+		Subsystem: "http_matchers_ipset",
+		Name:      "errors_total",
+		Help:      "Total number of errors during ipset tests by error type",
+	}, []string{"error_type"})
 }
 
 // IpsetMatcher matches the client_ip against Linux ipset lists using native netlink communication.
