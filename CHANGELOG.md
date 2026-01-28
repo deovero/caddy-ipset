@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed metrics disappearing after Caddy reload when the Prometheus registry changes. 
   Metrics are now created once and re-registered with any new registry, preserving their values across reloads.
 
+### Testing
+- Cleaned up and fixed Makefile targets for testing and coverage reporting
+
 ### Documentation
 - Cleaned up DOCKER-TESTING.md
 
