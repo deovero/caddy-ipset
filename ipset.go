@@ -439,7 +439,7 @@ ipsetLoop:
 
 		if debugEnabled {
 			// This is a hot path so we prevent string allocation if debug is not enabled
-			m.logger.Debug(fmt.Sprintf("Tested IP against ipset"),
+			m.logger.Debug("Tested IP against ipset",
 				zap.String("clientIp", clientIpStr),
 				zap.String("ipset", ipsetName),
 				zap.String("result", resultLabel),
