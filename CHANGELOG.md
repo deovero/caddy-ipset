@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 - Cleaned up DOCKER-TESTING.md
+- Added info about metrics and logging to module documentation
 
 ## [v0.5.0]
 

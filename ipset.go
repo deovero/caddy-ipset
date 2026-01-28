@@ -193,7 +193,7 @@ func (m *metricsStore) registerMetric(c prometheus.Collector) {
 // Requirements:
 //   - Linux system with `ip_set` kernel module loaded
 //   - CAP_NET_ADMIN capability, grant with: `sudo setcap cap_net_admin+ep /path/to/caddy`
-//   - Existing ipset list created via the `ipset` command
+//   - Existing ipset list, create with the `ipset` command
 //
 // Supports both IPv4 and IPv6 ipsets, performing validation during initialization.
 // Protocol mismatches (e.g., testing an IPv4 address against an IPv6 set) return false.
@@ -203,6 +203,9 @@ func (m *metricsStore) registerMetric(c prometheus.Collector) {
 //
 // Internally, it utilizes a buffered channel to pool netlink handles. This ensures
 // high-performance concurrency while capping idle resources to prevent leaks.
+//
+// The matcher integrates with Caddy's logging and metrics systems, providing detailed
+// debug logs and Prometheus metrics for monitoring.
 //
 // Example Caddyfile usage:
 //
