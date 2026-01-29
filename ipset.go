@@ -17,11 +17,11 @@ import (
 	"github.com/caddyserver/caddy/v2"
 	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
 	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+	"github.com/deovero/vishvananda-netlink"
+	"github.com/deovero/vishvananda-netlink/nl"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/syndtr/gocapability/capability" // does not require CGo for libcap
-	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netlink/nl"
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )

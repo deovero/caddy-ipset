@@ -39,6 +39,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
 ENV GOPATH=/go
 ENV PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ENV CGO_ENABLED=1
+ENV GOPRIVATE=github.com/deovero
 
 # Install xcaddy
 RUN curl -1sLf 'https://dl.cloudsmith.io/public/caddy/xcaddy/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-xcaddy-archive-keyring.gpg && \

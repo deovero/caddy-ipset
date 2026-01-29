@@ -1,8 +1,8 @@
 BenchmarkMatchHit
-BenchmarkMatchHit-12         	  115077	     11833 ns/op	   66872 B/op	      36 allocs/op
+BenchmarkMatchHit-12         	  101331	     11807 ns/op	   66872 B/op	      36 allocs/op
 BenchmarkMatchMiss
-BenchmarkMatchMiss-12        	   99853	     11412 ns/op	   66936 B/op	      38 allocs/op
+BenchmarkMatchMiss-12        	  101077	     12134 ns/op	   66936 B/op	      38 allocs/op
 BenchmarkMatchParallel
-BenchmarkMatchParallel-12    	   64048	     20681 ns/op	   66872 B/op	      36 allocs/op
+BenchmarkMatchParallel-12    	   56565	     21223 ns/op	   66872 B/op	      36 allocs/op
 BenchmarkFamilySkip
-BenchmarkFamilySkip-12       	10403857	       100.1 ns/op	      16 B/op	       1 allocs/op
+BenchmarkFamilySkip-12       	10552542	       102.7 ns/op	      16 B/op	       1 allocs/op

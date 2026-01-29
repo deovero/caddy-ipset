@@ -349,20 +349,6 @@ Error: ... at least one ipset name is required
 
 The module automatically skips mismatched IP families (you'll see debug messages like "skipped matching of IPv6 address against IPv4 ipset").
 
-### "unknown ipset data attribute from kernel" messages
-
-**Log messages:**
-```
-INFO    unknown ipset data attribute from kernel: {Type:21 Value:[12]} 21
-INFO    unknown ipset data attribute from kernel: {Type:16401 Value:[241 100 79 57]} 17
-```
-
-**Cause**: The `vishvananda/netlink` library logs attributes it receives from the kernel but doesn't explicitly parse (such as CIDR2, MAC addresses, or other extended ipset attributes).
-
-**Impact**: These are harmless informational messages. The ipset matcher works correctly - the library simply doesn't extract every possible attribute into its result structure.
-
-**Solution**: No action needed. These messages can be safely ignored. If you want to suppress them, you can adjust your logging configuration to filter INFO level messages from the netlink library.
-
 ### "failed to create netlink handle"
 
 **Error message:**

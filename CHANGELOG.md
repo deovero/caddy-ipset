@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+## [v0.5.2]
+
+### Fixed
+- Using our fork of vishvananda/netlink where the `unknown ipset data attribute from kernel` message is
+  removed. The fork is just v1.3.1 with [this commit](https://github.com/vishvananda/netlink/commit/7a3403a87034a1794786c43510f81f44f8e78096) cherry-picked.
+  When the next version of vishvananda/netlink is released with this fix, we can switch back to the official module.
+
 ## [v0.5.1]
 
 ### Fixed

@@ -5,7 +5,7 @@ go 1.25
 require (
 	github.com/caddyserver/caddy/v2 v2.10.2
 	github.com/syndtr/gocapability v0.0.0-20200815063812-42c35b437635
-	github.com/vishvananda/netlink v1.3.1
+	github.com/deovero/vishvananda-netlink v1.3.1-1
 	go.uber.org/zap v1.27.1
 	golang.org/x/sys v0.40.0
 )
@@ -35,6 +35,7 @@ require (
 	github.com/cloudflare/circl v1.6.1 // indirect
 	github.com/coreos/go-oidc/v3 v3.14.1 // indirect
 	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
+	github.com/deovero/vishvananda-netlink v1.3.1-1 // indirect
 	github.com/dgraph-io/badger v1.6.2 // indirect
 	github.com/dgraph-io/badger/v2 v2.2007.4 // indirect
 	github.com/dgraph-io/ristretto v0.2.0 // indirect
