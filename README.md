@@ -60,6 +60,17 @@ should display
 /path/to/caddy cap_net_admin=ep
 ```
 
+### For OpenRC (for example Alpine Linux)
+
+Edit the file [/etc/init.d/caddy](https://gitlab.alpinelinux.org/alpine/aports/-/blob/master/community/caddy/caddy.initd) and replace
+```
+capabilities="^cap_net_bind_service"
+```
+by 
+```
+capabilities=“^cap_net_bind_service,^cap_net_admin”
+```
+
 ## Usage
 
 ### Caddyfile Configuration
