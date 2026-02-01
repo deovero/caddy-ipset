@@ -70,6 +70,11 @@ by
 ```
 capabilities=“^cap_net_bind_service,^cap_net_admin”
 ```
+After that enable and start the service with:
+```
+rc-update add caddy
+rc-service caddy start
+```
 
 ## Usage
 
