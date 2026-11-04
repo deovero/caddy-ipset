@@ -36,29 +36,20 @@ xcaddy build --with github.com/deovero/caddy-ipset
 
 ## Permissions
 
-The module requires CAP_NET_ADMIN capability to access ipset via netlink.
-
-### Grant CAP_NET_ADMIN capability
-
-This enables direct netlink access for maximum performance:
+The module requires the CAP_NET_ADMIN capability to access ipset via netlink:
 
 ```bash
-sudo setcap cap_net_admin+ep /path/to/caddy
+sudo setcap 'cap_net_bind_service,cap_net_admin=+p' /path/to/caddy
 ```
 
-**Advantages:**
-- High performance (direct kernel communication)
-- No process spawning overhead
-- No additional configuration needed
+With `=+p` the capability is only raised on the thread doing the ipset lookup, and only for the duration of the lookup,
+like Caddy does for `cap_net_bind_service` since [v2.11.8](https://github.com/caddyserver/caddy/releases/tag/v2.11.8).
+For Caddy versions before v2.11.8 that bind to ports below 1024, use `=+ep` instead.
 
-**Note:** You can verify the capability is set with:
-```bash
-getcap /path/to/caddy
-```
-should display
-```text
-/path/to/caddy cap_net_admin=ep
-```
+**Notes:**
+- `setcap` replaces all capabilities of the binary, so grant them all in one command.
+- After replacing or rebuilding the Caddy binary, you'll need to grant the capabilities again.
+- Verify with `getcap /path/to/caddy`, which should display `/path/to/caddy cap_net_bind_service,cap_net_admin=p`.
 
 ### For OpenRC (for example Alpine Linux)
 
@@ -66,9 +57,9 @@ Edit the file [/etc/init.d/caddy](https://gitlab.alpinelinux.org/alpine/aports/-
 ```
 capabilities="^cap_net_bind_service"
 ```
-by 
+by
 ```
-capabilities=“^cap_net_bind_service,^cap_net_admin”
+capabilities="^cap_net_bind_service,^cap_net_admin"
 ```
 After that enable and start the service with:
 ```
@@ -194,7 +185,8 @@ make test
 
 ```bash
 make help           # Show all available commands
-make test           # Run tests in Docker container
+make test           # Run tests in Docker container (with both =+ep and =+p)
+make test-caddy     # End-to-end test: Caddy built with xcaddy, granted =+p, running as non-root
 make bench          # Run benchmarks in Docker container
 make coverage       # Generate coverage.out file
 make coverage-html  # Generate HTML coverage report (opens in browser)
@@ -209,22 +201,25 @@ For the full list of commands, run `make help`.
 
 **Error message:**
 ```
-Error: loading matcher modules: module name 'ipset': provision http.matchers.ipset: CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep /path/to/caddy
+Error: loading matcher modules: module name 'ipset': provision http.matchers.ipset: CAP_NET_ADMIN capability required. Grant with: sudo setcap 'cap_net_bind_service,cap_net_admin=+p' /path/to/caddy (use =+ep instead of =+p for Caddy < 2.11.8)
 ```
 
-**Cause**: The Caddy binary doesn't have the required CAP_NET_ADMIN capability to access ipset via netlink.
+**Cause**: The Caddy binary doesn't have the CAP_NET_ADMIN capability in its permitted set, so it can't access ipset via netlink.
+This also happens when the capability is removed by the environment, for example by `--cap-drop` in a container
+or by `CapabilityBoundingSet` in a systemd unit.
 
 **Solution**:
-1. Grant the capability to your Caddy binary:
+1. Grant the capabilities to your Caddy binary (see [Permissions](#permissions)):
    ```bash
-   sudo setcap cap_net_admin+ep /path/to/your/caddy
+   sudo setcap 'cap_net_bind_service,cap_net_admin=+p' /path/to/your/caddy
    ```
-2. Verify the capability is set:
+2. Verify the capabilities are set:
    ```bash
-   getcap ./caddy
-   # Should display: ./caddy cap_net_admin=ep
+   getcap /path/to/your/caddy
+   # Should display: /path/to/your/caddy cap_net_bind_service,cap_net_admin=p
    ```
-3. **Important**: If you replace or rebuild the Caddy binary, you'll need to grant the capability again.
+3. When running in a container or systemd unit, make sure CAP_NET_ADMIN is not dropped from the bounding set.
+4. **Important**: If you replace or rebuild the Caddy binary, you'll need to grant the capabilities again.
 
 ### "no such file or directory" during provision of ipset
 
@@ -259,7 +254,7 @@ Error: ... loading matcher modules: module name 'ipset': provision http.matchers
 **Option 1: Check CAP_NET_ADMIN capability**
 ```bash
 getcap /path/to/caddy
-# Should show: /path/to/caddy cap_net_admin=ep
+# Should show cap_net_admin with =p or =ep, e.g.: /path/to/caddy cap_net_bind_service,cap_net_admin=p
 ```
 
 **Option 2: Adjust systemd service restrictions**

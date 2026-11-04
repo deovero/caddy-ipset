@@ -44,23 +44,30 @@ fi
 echo -e "${GREEN}✓ Test binary built${NC}"
 echo ""
 
-# Grant CAP_NET_ADMIN capability to the test binary
-echo -e "${YELLOW}Granting CAP_NET_ADMIN capability to test binary...${NC}"
-setcap cap_net_admin+ep /tmp/caddy-ipset.test
-echo -e "${GREEN}✓ Capability granted${NC}"
-echo ""
+# Run the tests as non-root user (testuser) twice:
+#  - "effective": binary granted cap_net_admin=+ep, CAP_NET_ADMIN is effective on all threads
+#  - "raise":     binary granted cap_net_admin=+p, the module raises CAP_NET_ADMIN per lookup
+# Failures are collected so both modes always run.
+TEST_EXIT_CODE=0
+for MODE in effective raise; do
+    if [ "$MODE" = "effective" ]; then CAPS="cap_net_admin=+ep"; else CAPS="cap_net_admin=+p"; fi
+    echo -e "${YELLOW}Granting ${CAPS} to test binary...${NC}"
+    setcap "$CAPS" /tmp/caddy-ipset.test
+    getcap /tmp/caddy-ipset.test
+    echo -e "${YELLOW}Running tests as non-root user (testuser) with ${CAPS}...${NC}"
+    if su - testuser -c "cd /workspace && CADDY_IPSET_EXPECT_CAP_MODE=${MODE} /tmp/caddy-ipset.test -test.v -test.coverprofile=/tmp/coverage-${MODE}.out"; then
+        echo -e "${GREEN}✓ Tests passed with ${CAPS}${NC}"
+    else
+        echo -e "${RED}✗ Tests failed with ${CAPS}${NC}"
+        TEST_EXIT_CODE=1
+    fi
+    echo ""
+done
 
-# Run tests as non-root user with CAP_NET_ADMIN capability
-echo -e "${YELLOW}Running tests as non-root user (testuser) with CAP_NET_ADMIN...${NC}"
-su - testuser -c "cd /workspace && /tmp/caddy-ipset.test -test.v -test.coverprofile=/workspace/coverage.out"
-TEST_EXIT_CODE=$?
-
-if [ $TEST_EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✓ Tests passed${NC}"
-else
-    echo -e "${RED}✗ Tests failed${NC}"
+# Merge the coverage profiles of both runs
+if [ -f /tmp/coverage-effective.out ] && [ -f /tmp/coverage-raise.out ]; then
+    { cat /tmp/coverage-effective.out; tail -n +2 /tmp/coverage-raise.out; } > coverage.out
 fi
-echo ""
 
 # Show coverage
 if [ -f coverage.out ]; then

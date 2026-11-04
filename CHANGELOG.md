@@ -8,16 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Support for granting CAP_NET_ADMIN with `setcap cap_net_admin=+p` instead of `=+ep`, matching
+  [Caddy v2.11.8](https://github.com/caddyserver/caddy/releases/tag/v2.11.8) which allows `cap_net_bind_service=+p`.
+  When CAP_NET_ADMIN is permitted but not effective, the module raises it per lookup on a locked OS thread only,
+  and lowers it again before releasing the thread.
 
 ### Removed
+- Dependency on `github.com/syndtr/gocapability`, capabilities are read and set with `golang.org/x/sys/unix`.
 
 ### Changed
+- The provisioning error for a missing CAP_NET_ADMIN now recommends `setcap 'cap_net_bind_service,cap_net_admin=+p'`.
 
 ### Fixed
 
 ### Testing
+- `make test` runs the test suite twice: with `cap_net_admin=+ep` and with `cap_net_admin=+p`.
+- Tests that verify CAP_NET_ADMIN is not left effective on any thread after lookups.
+- `make test-caddy` builds Caddy v2.11.8 with this module, grants `cap_net_bind_service,cap_net_admin=+p`,
+  runs it as a non-root user on port 80 and checks the matcher end-to-end.
 
 ### Documentation
+- Permissions section explains `=+p` vs `=+ep`, and that `setcap` replaces all file capabilities.
 
 ## [v0.5.2]
 

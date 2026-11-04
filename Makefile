@@ -1,4 +1,4 @@
-.PHONY: help test format vet clean build rebuild shell clean-full test-specific coverage coverage-html check-ipset docker-test
+.PHONY: help test test-caddy format vet clean build rebuild shell clean-full test-specific coverage coverage-html check-ipset docker-test
 
 # Default target
 help:
@@ -6,6 +6,7 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  make test              - Run tests in Docker container"
+	@echo "  make test-caddy        - End-to-end test with Caddy built by xcaddy, granted =+p"
 	@echo "  make bench             - Run benchmarks in Docker container"
 	@echo "  make format            - Format all Go files with gofmt"
 	@echo "  make vet               - Run go vet on all files"
@@ -26,6 +27,11 @@ build:
 test:
 	@echo "Running tests in Docker container..."
 	docker-compose run --rm caddy-ipset-test /workspace/scripts/test-docker.sh
+
+# End-to-end test: build Caddy with xcaddy, grant =+p capabilities, run as non-root
+test-caddy:
+	@echo "Running end-to-end Caddy test in Docker container..."
+	docker-compose run --rm caddy-ipset-test /workspace/scripts/test-caddy-docker.sh $(CADDY_VERSION)
 
 # Run benchmarks in Docker container
 bench:

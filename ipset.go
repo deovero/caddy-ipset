@@ -21,7 +21,6 @@ import (
 	"github.com/deovero/vishvananda-netlink/nl"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/syndtr/gocapability/capability" // does not require CGo for libcap
 	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 )
@@ -192,7 +191,8 @@ func (m *metricsStore) registerMetric(c prometheus.Collector) {
 //
 // Requirements:
 //   - Linux system with `ip_set` kernel module loaded
-//   - CAP_NET_ADMIN capability, grant with: `sudo setcap cap_net_admin+ep /path/to/caddy`
+//   - CAP_NET_ADMIN capability, grant with: `sudo setcap cap_net_admin=+p /path/to/caddy`
+//     (=+ep also works; see README.md for combining it with cap_net_bind_service)
 //   - Existing ipset list, create with the `ipset` command
 //
 // Supports both IPv4 and IPv6 ipsets, performing validation during initialization.
@@ -246,6 +246,11 @@ type IpsetMatcher struct {
 	// closed is an atomic flag to indicate if the module is being cleaned up
 	closed int32
 
+	// raiseNetAdmin is true when CAP_NET_ADMIN is permitted but not effective
+	// (binary granted with =+p). Netlink operations then run on a locked OS
+	// thread with the capability temporarily raised, see withNetAdmin().
+	raiseNetAdmin bool
+
 	// During Provision() we will store the logger from Caddy's context here.
 	logger *zap.Logger
 }
@@ -289,22 +294,29 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	m.instanceID = fmt.Sprintf("%d.%d", os.Getpid(), atomic.AddUint64(&instanceCounter, 1))
 	metrics.instances.Inc()
 
-	// Check if the Effective capabilities set contains CAP_NET_ADMIN
-	caps, err := capability.NewPid2(0)
+	// Check how CAP_NET_ADMIN is available to the process
+	effective, permitted, err := netAdminState()
 	if err != nil {
 		return fmt.Errorf("failed to get process capabilities: %w", err)
 	}
-	err = caps.Load()
-	if err != nil {
-		return fmt.Errorf("failed to load process capabilities: %w", err)
-	}
-	hasNetAdmin := caps.Get(capability.EFFECTIVE, capability.CAP_NET_ADMIN)
-	if hasNetAdmin {
-		m.logger.Debug("the process has CAP_NET_ADMIN capability",
+	switch {
+	case effective:
+		m.raiseNetAdmin = false
+		m.logger.Debug("CAP_NET_ADMIN is effective",
 			zap.String("instance_id", m.instanceID),
 		)
-	} else {
-		return fmt.Errorf("CAP_NET_ADMIN capability required. Grant with: sudo setcap cap_net_admin+ep %s", os.Args[0])
+	case permitted:
+		// Granted with =+p: raise it only on the thread doing the netlink calls
+		m.raiseNetAdmin = true
+		m.logger.Debug("CAP_NET_ADMIN is permitted but not effective, it will be raised per lookup on a locked thread",
+			zap.String("instance_id", m.instanceID),
+		)
+	default:
+		return fmt.Errorf(
+			"CAP_NET_ADMIN capability required. Grant with: sudo setcap 'cap_net_bind_service,cap_net_admin=+p' %s"+
+				" (use =+ep instead of =+p for Caddy < 2.11.8)",
+			os.Args[0],
+		)
 	}
 
 	// Initialize the channel pool.
@@ -317,6 +329,24 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	// Pre-allocate ipsetFamilyVersions slice with known length
 	m.ipsetFamilyVersions = make([]uint8, len(m.Ipsets))
 
+	// Validate the ipsets. The netlink handle has to be opened while
+	// CAP_NET_ADMIN is effective, so this runs inside withNetAdmin().
+	if _, err := withNetAdmin(m.raiseNetAdmin, m.validateIpsets); err != nil {
+		return err
+	}
+
+	m.logger.Info("ipset matcher provisioned",
+		zap.String("instance_id", m.instanceID),
+		zap.Int("ipset_count", len(m.Ipsets)),
+	)
+
+	return nil
+}
+
+// validateIpsets verifies that every configured ipset exists and stores its family.
+// It must run on a thread with CAP_NET_ADMIN effective, see withNetAdmin().
+// The returned struct{} is unused, it exists to fit the withNetAdmin() signature.
+func (m *IpsetMatcher) validateIpsets() (struct{}, error) {
 	// Create a temporary handle just for ipset access validation.
 	// We do not use the pool here to ensure deterministic startup behavior.
 	handle, err := netlink.NewHandle(unix.NETLINK_NETFILTER)
@@ -326,7 +356,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 			zap.Error(err),
 			zap.String("instance_id", m.instanceID),
 		)
-		return err
+		return struct{}{}, err
 	}
 	defer func() {
 		handle.Close()
@@ -337,17 +367,17 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 	for i, ipsetName := range m.Ipsets {
 		// Validate ipset name is not empty
 		if ipsetName == "" {
-			return fmt.Errorf("ipset name is required")
+			return struct{}{}, fmt.Errorf("ipset name is required")
 		}
 		// Validate ipset name maximum length
 		if len(ipsetName) >= nl.IPSET_MAXNAMELEN {
-			return fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", ipsetName, nl.IPSET_MAXNAMELEN-1)
+			return struct{}{}, fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", ipsetName, nl.IPSET_MAXNAMELEN-1)
 		}
 
 		// Verify the ipset exists using netlink
 		result, err := handle.IpsetList(ipsetName)
 		if err != nil {
-			return fmt.Errorf("error validating ipset '%s': %w", ipsetName, err)
+			return struct{}{}, fmt.Errorf("error validating ipset '%s': %w", ipsetName, err)
 		}
 
 		// Store the family information for this ipset
@@ -361,12 +391,7 @@ func (m *IpsetMatcher) Provision(ctx caddy.Context) error {
 		)
 	}
 
-	m.logger.Info("ipset matcher provisioned",
-		zap.String("instance_id", m.instanceID),
-		zap.Int("ipset_count", len(m.Ipsets)),
-	)
-
-	return nil
+	return struct{}{}, nil
 }
 
 // Cleanup closes all netlink handles when the module is unloaded.
@@ -468,6 +493,16 @@ func (m *IpsetMatcher) MatchWithError(req *http.Request) (bool, error) {
 	// Get the IP family string for comparison and logging
 	ipFamily := ipFamilyVersion(clientIp)
 
+	// The ipset tests need CAP_NET_ADMIN effective on the calling thread,
+	// withNetAdmin() takes care of that when the binary was granted =+p.
+	return withNetAdmin(m.raiseNetAdmin, func() (bool, error) {
+		return m.testIpsets(clientIp, clientIpStr, ipFamily, debugEnabled)
+	})
+}
+
+// testIpsets tests the client IP against all configured ipsets (OR logic).
+// It must run on a thread with CAP_NET_ADMIN effective, see withNetAdmin().
+func (m *IpsetMatcher) testIpsets(clientIp net.IP, clientIpStr string, ipFamily uint8, debugEnabled bool) (bool, error) {
 	// Reuse IPSetEntry to avoid allocation per ipset test
 	entry := &netlink.IPSetEntry{IP: clientIp}
 

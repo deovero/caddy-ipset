@@ -121,7 +121,8 @@ xcaddy build --with github.com/deovero/caddy-ipset=/workspace
 
 3. **test-docker.sh**: Automated test script that:
    - Verifies ipset setup
-   - Builds test binary and grants CAP_NET_ADMIN capability with setcap
+   - Builds test binary and grants CAP_NET_ADMIN capability with setcap,
+     running the tests once with `cap_net_admin=+ep` and once with `cap_net_admin=+p`
    - Runs tests as non-root user (testuser) with CAP_NET_ADMIN
    - Generates coverage reports
 
