@@ -51,13 +51,10 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
-    # The test binary is built in $RUNNER_TEMP instead of /tmp: on newer Ubuntu runner images
-    # /tmp is a tmpfs mounted with nosuid, and the kernel ignores file capabilities on nosuid mounts.
+    # The test binary is built in $RUNNER_TEMP instead of /tmp: on the Ubuntu 26.04 runner image
+    # a binary in /tmp did not get the capabilities granted with setcap.
     - name: Build test binary
-      run: |
-        findmnt -T /tmp -o TARGET,FSTYPE,OPTIONS || true
-        findmnt -T "$RUNNER_TEMP" -o TARGET,FSTYPE,OPTIONS || true
-        go test -c -race -cover -o "$RUNNER_TEMP/caddy-ipset.test"
+      run: go test -c -race -cover -o "$RUNNER_TEMP/caddy-ipset.test"
 
     # CADDY_IPSET_EXPECT_CAP_MODE makes the tests fail instead of skip when the capability is missing
     - name: Run tests with cap_net_admin=+ep

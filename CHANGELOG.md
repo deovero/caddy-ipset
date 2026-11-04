@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+
+### Removed
+
+### Changed
+
+### Fixed
+
+### Testing
+
+### Documentation
+
+## [v0.6.0]
+
+### Added
 - Support for granting CAP_NET_ADMIN with `setcap cap_net_admin=+p` instead of `=+ep`, matching
   [Caddy v2.11.8](https://github.com/caddyserver/caddy/releases/tag/v2.11.8) which allows `cap_net_bind_service=+p`.
   When CAP_NET_ADMIN is permitted but not effective, the module raises it per lookup on a locked OS thread only,
@@ -19,16 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The provisioning error for a missing CAP_NET_ADMIN now recommends `setcap 'cap_net_bind_service,cap_net_admin=+p'`.
 
-### Fixed
-
 ### Testing
 - `make test` runs the test suite twice: with `cap_net_admin=+ep` and with `cap_net_admin=+p`.
 - Tests that verify CAP_NET_ADMIN is not left effective on any thread after lookups.
 - `make test-caddy` builds Caddy v2.11.8 with this module, grants `cap_net_bind_service,cap_net_admin=+p`,
   runs it as a non-root user on port 80 and checks the matcher end-to-end.
+- CI runs the tests with both `cap_net_admin=+ep` and `=+p`, and fails instead of skipping tests when the capability is missing.
+- CI builds the test binary in `$RUNNER_TEMP`, on the Ubuntu 26.04 runner a binary in `/tmp` did not get its capabilities.
 
 ### Documentation
 - Permissions section explains `=+p` vs `=+ep`, and that `setcap` replaces all file capabilities.
+- Instructions for OpenRC (for example Alpine Linux). Thanks @ogmkp ([#1](https://github.com/deovero/caddy-ipset/issues/1))
 
 ## [v0.5.2]
 
