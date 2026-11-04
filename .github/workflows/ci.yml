@@ -51,14 +51,26 @@ jobs:
     - name: Run go vet
       run: go vet ./...
 
+    # The test binary is built in $RUNNER_TEMP instead of /tmp: on newer Ubuntu runner images
+    # /tmp is a tmpfs mounted with nosuid, and the kernel ignores file capabilities on nosuid mounts.
     - name: Build test binary
-      run: go test -c -race -cover -o /tmp/caddy-ipset.test
+      run: |
+        findmnt -T /tmp -o TARGET,FSTYPE,OPTIONS || true
+        findmnt -T "$RUNNER_TEMP" -o TARGET,FSTYPE,OPTIONS || true
+        go test -c -race -cover -o "$RUNNER_TEMP/caddy-ipset.test"
 
-    - name: Grant CAP_NET_ADMIN capability to test binary
-      run: sudo setcap cap_net_admin+ep /tmp/caddy-ipset.test
+    # CADDY_IPSET_EXPECT_CAP_MODE makes the tests fail instead of skip when the capability is missing
+    - name: Run tests with cap_net_admin=+ep
+      run: |
+        sudo setcap cap_net_admin=+ep "$RUNNER_TEMP/caddy-ipset.test"
+        getcap "$RUNNER_TEMP/caddy-ipset.test"
+        CADDY_IPSET_EXPECT_CAP_MODE=effective "$RUNNER_TEMP/caddy-ipset.test" -test.v -test.coverprofile=coverage-effective.out
 
-    - name: Run tests with capability
-      run: /tmp/caddy-ipset.test -test.v -test.coverprofile=coverage.out
+    - name: Run tests with cap_net_admin=+p
+      run: |
+        sudo setcap cap_net_admin=+p "$RUNNER_TEMP/caddy-ipset.test"
+        getcap "$RUNNER_TEMP/caddy-ipset.test"
+        CADDY_IPSET_EXPECT_CAP_MODE=raise "$RUNNER_TEMP/caddy-ipset.test" -test.v -test.coverprofile=coverage-raise.out
 
   lint:
     name: Lint
