@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 ### Fixed
+- Provisioning no longer dumps all entries of each ipset, it only requests the header. With CAP_NET_ADMIN granted
+  with `=+p` a dump of a 92k entry ipset took about 10 seconds for each matcher in the config.
 
 ### Testing
 

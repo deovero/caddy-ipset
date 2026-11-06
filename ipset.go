@@ -374,8 +374,10 @@ func (m *IpsetMatcher) validateIpsets() (struct{}, error) {
 			return struct{}{}, fmt.Errorf("ipset name '%s' exceeds maximum length of %d characters", ipsetName, nl.IPSET_MAXNAMELEN-1)
 		}
 
-		// Verify the ipset exists using netlink
-		result, err := handle.IpsetList(ipsetName)
+		// Verify the ipset exists using netlink.
+		// IpsetHeader on purpose: IpsetList dumps all entries, which takes seconds on a large
+		// ipset and is repeated for each matcher in the config, slowing down the start of Caddy.
+		result, err := handle.IpsetHeader(ipsetName)
 		if err != nil {
 			return struct{}{}, fmt.Errorf("error validating ipset '%s': %w", ipsetName, err)
 		}
