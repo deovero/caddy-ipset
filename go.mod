@@ -4,7 +4,7 @@ go 1.25
 
 require (
 	github.com/caddyserver/caddy/v2 v2.10.2
-	github.com/deovero/vishvananda-netlink v1.3.1-1
+	github.com/deovero/vishvananda-netlink v1.3.1-2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	go.uber.org/zap v1.27.1
